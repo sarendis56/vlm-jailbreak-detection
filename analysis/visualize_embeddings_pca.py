@@ -14,6 +14,11 @@ from sklearn.preprocessing import StandardScaler
 import seaborn as sns
 import os
 import warnings
+
+import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'code'))
+
 from load_datasets import *
 from feature_extractor import HiddenStateExtractor
 from balanced_flava import FlavaFeatureExtractor
