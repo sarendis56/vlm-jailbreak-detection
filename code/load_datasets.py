@@ -60,7 +60,7 @@ def load_FigTxt():
     print("Successfully built FigTxt dataset.")
     return safe_set + unsafe_set
 
-def load_mm_vet(json_path = "data/MM-Vet/mm-vet_metadata.json"):
+def load_mm_vet(json_path = "data/MM-Vet/mm-vet.json"):
     dataset = []
     try:
         with open(json_path, "r") as f:
@@ -71,57 +71,7 @@ def load_mm_vet(json_path = "data/MM-Vet/mm-vet_metadata.json"):
         return []
     return dataset
 
-def load_mm_vet_v2(json_path = "data/mm-vet-v2/mm-vet-v2.json"):
-    dataset = []
-    try:
-        with open(json_path, "r") as f:
-            data = json.load(f)
 
-        for sample_id, sample_data in data.items():
-            # Extract question text and image references
-            question = sample_data["question"]
-
-            # Parse image references from question (format: <IMG>filename)
-            import re
-            img_matches = re.findall(r'<IMG>([^<]+)', question)
-
-            # Clean question text by removing image tags
-            clean_question = re.sub(r'<IMG>[^<]+', '', question).strip()
-
-            if img_matches:
-                # Handle multiple images by taking the first valid image to avoid processing complexity
-                img_path = None
-                for img_file in img_matches:
-                    potential_path = f"data/mm-vet-v2/images/{img_file}"
-                    if os.path.exists(potential_path):
-                        img_path = potential_path
-                        break  # Take the first valid image
-
-                if img_path:
-                    sample = {
-                        "id": sample_id,
-                        "txt": clean_question,
-                        "img": img_path,
-                        "toxicity": 0  # MM-Vet v2 contains benign samples
-                    }
-                    dataset.append(sample)
-            else:
-                # Text-only sample
-                sample = {
-                    "id": sample_id,
-                    "txt": clean_question,
-                    "img": None,
-                    "toxicity": 0
-                }
-                dataset.append(sample)
-
-        print(f"Successfully built MM-Vet v2 dataset with {len(dataset)} samples.")
-
-    except Exception as e:
-        print(f"Error loading MM-Vet v2: {e}")
-        return []
-
-    return dataset
     
 def load_mm_safety_bench(file_path):   
     dataset = []
@@ -258,12 +208,12 @@ def load_mm_safety_bench_txt(max_samples=2000):
     return dataset
 
 def load_JailBreakV_figstep(max_samples=None):
-    """Load JailbreakV-28K dataset using only figstep images"""
+    """Load JailBreakV-28K dataset using only figstep images"""
     return _load_JailBreakV_subset(attack_types=["figstep"], max_samples=max_samples)
 
 def load_JailBreakV_llm_transfer_attack(image_styles=None, max_samples=None):
     """
-    Load JailbreakV-28K dataset using llm_transfer_attack images
+    Load JailBreakV-28K dataset using llm_transfer_attack images
 
     Args:
         image_styles: List of styles to include ['nature', 'noise', 'SD', 'blank'] or None for all
@@ -274,7 +224,7 @@ def load_JailBreakV_llm_transfer_attack(image_styles=None, max_samples=None):
 
 def load_JailBreakV_query_related(image_styles=None, max_samples=None):
     """
-    Load JailbreakV-28K dataset using query_related images
+    Load JailBreakV-28K dataset using query_related images
 
     Args:
         image_styles: List of styles to include ['SD', 'typo'] or None for all
@@ -285,7 +235,7 @@ def load_JailBreakV_query_related(image_styles=None, max_samples=None):
 
 def load_JailBreakV_custom(attack_types=None, image_styles=None, max_samples=None):
     """
-    Load JailbreakV-28K dataset with custom attack types and image styles
+    Load JailBreakV-28K dataset with custom attack types and image styles
 
     Args:
         attack_types: List of attack types ['figstep', 'llm_transfer_attack', 'query_related'] or None for all
@@ -297,7 +247,7 @@ def load_JailBreakV_custom(attack_types=None, image_styles=None, max_samples=Non
 
 def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=None):
     """
-    Internal method to load JailbreakV-28K dataset subsets with granular control
+    Internal method to load JailBreakV-28K dataset subsets with granular control
 
     Args:
         attack_types: List of attack types to include or None for all
@@ -306,7 +256,7 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
     """
     unsafe_set = []
     # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_base_paths = ["data/JailbreakV-28K", "../data/JailbreakV-28K"]
+    possible_base_paths = ["data/JailBreakV-28K", "../data/JailBreakV-28K"]
     base_path = None
 
     for path in possible_base_paths:
@@ -315,7 +265,7 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
             break
 
     if base_path is None:
-        print("JailbreakV-28K directory not found")
+        print("JailBreakV-28K directory not found")
         return []
 
     # Default attack types if not specified
@@ -421,14 +371,14 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
     return unsafe_set
 
 def load_JailBreakV_all_images():
-    """Load JailbreakV-28K dataset using ALL available images (backward compatibility)"""
+    """Load JailBreakV-28K dataset using ALL available images (backward compatibility)"""
     return _load_JailBreakV_subset(max_samples=2000)  # Keep original default limit
 
 def list_JailBreakV_available_styles():
     """
-    List all available attack types and image styles in the JailbreakV-28K dataset
+    List all available attack types and image styles in the JailBreakV-28K dataset
     """
-    base_path = "data/JailbreakV-28K"
+    base_path = "data/JailBreakV-28K"
 
     # Define available styles based on filename prefixes
     available_styles = {
@@ -437,7 +387,7 @@ def list_JailBreakV_available_styles():
         "query_related": ["SD", "typo"]
     }
 
-    print("JailbreakV-28K Available Attack Types and Image Styles:")
+    print("JailBreakV-28K Available Attack Types and Image Styles:")
     print("=" * 60)
 
     for attack_type, styles in available_styles.items():
@@ -544,49 +494,7 @@ def load_all_mm_safety_bench_categories(max_samples_per_category=200):
 
     return datasets_dict
 
-def load_safetybench(max_samples=None):
-    """Load SafetyBench/BeaverTails dataset for text-only mixed samples"""
-    import json
-
-    try:
-        with open("data/SafetyBench/safetybench_samples.json", 'r', encoding='utf-8') as f:
-            samples = json.load(f)
-
-        if max_samples:
-            samples = samples[:max_samples]
-
-        print(f"Successfully loaded {len(samples)} samples from SafetyBench")
-        return samples
-
-    except FileNotFoundError:
-        print("SafetyBench dataset not found. Please run download_datasets.py first.")
-        return []
-    except Exception as e:
-        print(f"Error loading SafetyBench: {e}")
-        return []
-
-def load_realworld_qa(max_samples=None):
-    """Load RealWorldQA dataset for multimodal benign samples"""
-    import json
-
-    try:
-        with open("data/RealWorldQA/realworld_qa_samples.json", 'r', encoding='utf-8') as f:
-            samples = json.load(f)
-
-        total_available = len(samples)
-        if max_samples and max_samples < total_available:
-            samples = samples[:max_samples]
-            print(f"Successfully loaded {len(samples)} samples from RealWorldQA (out of {total_available} available)")
-        else:
-            print(f"Successfully loaded {len(samples)} samples from RealWorldQA (all available)")
-        return samples
-
-    except FileNotFoundError:
-        print("RealWorldQA dataset not found. Please run download_datasets.py first.")
-        return []
-    except Exception as e:
-        print(f"Error loading RealWorldQA: {e}")
-        return []
+# SafetyBench and RealWorldQA removed - not used in current experiments
 
 def load_alpaca(max_samples=None):
     """Load Alpaca instruction following dataset"""
@@ -611,28 +519,7 @@ def load_alpaca(max_samples=None):
         print(f"Error loading Alpaca: {e}")
         return []
     
-def load_coco_captions(max_samples=None):
-    """Load MS COCO Captions dataset"""
-    import json
-
-    try:
-        with open("data/COCO_Captions/coco_captions_samples.json", 'r', encoding='utf-8') as f:
-            samples = json.load(f)
-
-        total_available = len(samples)
-        if max_samples and max_samples < total_available:
-            samples = samples[:max_samples]
-            print(f"Successfully loaded {len(samples)} samples from COCO Captions (out of {total_available} available)")
-        else:
-            print(f"Successfully loaded {len(samples)} samples from COCO Captions (all available)")
-        return samples
-
-    except FileNotFoundError:
-        print("COCO Captions dataset not found. Please run download_large_scale_datasets.py first.")
-        return []
-    except Exception as e:
-        print(f"Error loading COCO Captions: {e}")
-        return []
+# COCO Captions removed - not used in current experiments
 
 def load_advbench(max_samples=None):
     """Load AdvBench harmful prompts dataset"""
@@ -657,28 +544,7 @@ def load_advbench(max_samples=None):
         print(f"Error loading AdvBench: {e}")
         return []
 
-def load_alpaca_toxic_qa(max_samples=None):
-    """Load AlpacaToxicQA_ShareGPT dataset"""
-    import json
-
-    try:
-        with open("data/AlpacaToxicQA/alpaca_toxic_qa_samples.json", 'r', encoding='utf-8') as f:
-            samples = json.load(f)
-
-        total_available = len(samples)
-        if max_samples and max_samples < total_available:
-            samples = samples[:max_samples]
-            print(f"Successfully loaded {len(samples)} samples from AlpacaToxicQA (out of {total_available} available)")
-        else:
-            print(f"Successfully loaded {len(samples)} samples from AlpacaToxicQA (all available)")
-        return samples
-
-    except FileNotFoundError:
-        print("AlpacaToxicQA dataset not found. Please run download_large_scale_datasets.py first.")
-        return []
-    except Exception as e:
-        print(f"Error loading AlpacaToxicQA: {e}")
-        return []
+# AlpacaToxicQA removed - not used in current experiments
 
 def load_dan_prompts(max_samples=None):
     """Load DAN (Do Anything Now) jailbreak prompts"""
@@ -762,125 +628,7 @@ def load_vqav2(max_samples=None):
     print("VQAv2 dataset not found.")
     return []
 
-def load_sharegpt(max_samples=None):
-    """Load ShareGPT dataset"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/ShareGPT/sharegpt_samples.json",
-        "../data/ShareGPT/sharegpt_samples.json"
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from ShareGPT (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from ShareGPT (all available)")
-                return samples
-        except Exception:
-            continue
-
-    print("ShareGPT dataset not found.")
-    return []
-
-def load_lima(max_samples=None):
-    """Load LIMA dataset"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/LIMA/lima_samples.json",
-        "../data/LIMA/lima_samples.json"
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from LIMA (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from LIMA (all available)")
-                return samples
-        except Exception as e:
-            continue
-
-    print("LIMA dataset not found.")
-    return []
-
-def load_truthfulqa(max_samples=None):
-    """Load TruthfulQA dataset"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/TruthfulQA/truthfulqa_samples.json",
-        "../data/TruthfulQA/truthfulqa_samples.json"
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from TruthfulQA (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from TruthfulQA (all available)")
-                return samples
-        except Exception as e:
-            continue
-
-    print("TruthfulQA dataset not found.")
-    return []
-
-def load_harmbench(max_samples=None):
-    """Load HarmBench dataset"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/HarmBench/harmbench_samples.json",
-        "../data/HarmBench/harmbench_samples.json"
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from HarmBench (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from HarmBench (all available)")
-                return samples
-        except Exception as e:
-            continue
-
-    print("HarmBench dataset not found.")
-    return []
+# ShareGPT, LIMA, TruthfulQA, and HarmBench removed - not used in current experiments
 
 def load_openassistant(max_samples=None):
     """Load OpenAssistant dataset for benign text samples"""
@@ -913,273 +661,6 @@ def load_openassistant(max_samples=None):
     print("OpenAssistant dataset not found. Please run download_openassistant.py first.")
     return []
 
-def load_ultrachat(max_samples=None):
-    """Load UltraChat dataset for benign conversational samples"""
-    import json
-    import os
+# UltraChat, WildJailbreak variants, JBB-Behaviors, and MMIU-Benchmark removed - not used in current experiments
 
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/UltraChat/ultrachat_samples.json",
-        "../data/UltraChat/ultrachat_samples.json",
-        os.path.join(os.path.dirname(__file__), "..", "data", "UltraChat", "ultrachat_samples.json")
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from UltraChat (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from UltraChat (all available)")
-                return samples
-        except Exception:
-            continue
-
-    print("UltraChat dataset not found. Please run download_ultrachat.py first.")
-    return []
-
-def load_wildjailbreak_malicious(max_samples=None):
-    """Load WildJailbreak malicious dataset for harmful text samples"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/WildJailbreak/wildjailbreak_malicious.json",
-        "../data/WildJailbreak/wildjailbreak_malicious.json",
-        os.path.join(os.path.dirname(__file__), "..", "data", "WildJailbreak", "wildjailbreak_malicious.json")
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} malicious samples from WildJailbreak (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} malicious samples from WildJailbreak (all available)")
-                return samples
-        except Exception:
-            continue
-
-    print("WildJailbreak malicious dataset not found. Please run download_wildjailbreak.py first.")
-    return []
-
-def load_wildjailbreak_benign(max_samples=None):
-    """Load WildJailbreak benign dataset - DEPRECATED
-
-    WildJailbreak 'benign' samples are designed to resemble harmful prompts
-    and are not suitable for benign training data in jailbreak detection.
-    This function always returns an empty list.
-
-    Use other datasets (Alpaca, ShareGPT, OpenAssistant, etc.) for benign samples.
-    """
-    print("WildJailbreak benign samples are not available.")
-    print("Reason: WildJailbreak 'benign' samples are designed to resemble harmful prompts")
-    print("        and are not suitable for benign training data in jailbreak detection.")
-    print("Recommendation: Use Alpaca, ShareGPT, OpenAssistant, UltraChat, etc. for benign samples.")
-    return []
-
-def load_wildjailbreak_eval_benign(max_samples=None):
-    """Load WildJailbreak eval adversarial_benign samples for benign test set
-
-    These samples look malicious but are actually benign - perfect for testing
-    jailbreak detection systems on challenging edge cases.
-    """
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/WildJailbreak/wildjailbreak_eval_benign.json",
-        "../data/WildJailbreak/wildjailbreak_eval_benign.json",
-        os.path.join(os.path.dirname(__file__), "..", "data", "WildJailbreak", "wildjailbreak_eval_benign.json")
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} adversarial_benign samples from WildJailbreak eval (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} adversarial_benign samples from WildJailbreak eval (all available)")
-                return samples
-        except Exception:
-            continue
-
-    print("WildJailbreak eval benign dataset not found. Please run download_wildjailbreak_eval.py first.")
-    return []
-
-def load_wildjailbreak(max_samples=None):
-    """Load WildJailbreak dataset for malicious text samples (backward compatibility)"""
-    return load_wildjailbreak_malicious(max_samples)
-
-def load_jbb_behaviors(max_samples=None):
-    """Load JailbreakBench JBB-Behaviors dataset for malicious text samples (Original source only)"""
-    try:
-        from datasets import load_dataset
-
-        # Load the JBB-Behaviors dataset
-        dataset = load_dataset('JailbreakBench/JBB-Behaviors', 'behaviors')
-        harmful_data = list(dataset['harmful'])  # Convert to list for easier processing
-
-        # Filter to only 'Original' source to avoid duplication
-        original_samples = [item for item in harmful_data if item['Source'] == 'Original']
-
-        samples = []
-        for item in original_samples:
-            sample = {
-                "txt": item['Goal'],  # Use the Goal as the text prompt
-                "img": None,  # Text-only dataset
-                "toxicity": 1,  # All samples are malicious
-                "behavior": item['Behavior'],
-                "category": item['Category'],
-                "source": "JBB-Behaviors"
-            }
-            samples.append(sample)
-
-        total_available = len(samples)
-        if max_samples and max_samples < total_available:
-            samples = samples[:max_samples]
-            print(f"Successfully loaded {len(samples)} samples from JBB-Behaviors (out of {total_available} available)")
-        else:
-            print(f"Successfully loaded {len(samples)} samples from JBB-Behaviors (all available)")
-
-        return samples
-
-    except Exception as e:
-        print(f"Error loading JBB-Behaviors: {e}")
-        return []
-
-def load_mmiu_benchmark(max_samples=None):
-    """Load MMIU-Benchmark dataset for multimodal benign samples"""
-    import json
-    import os
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/MMIU/mmiu_samples.json",
-        "../data/MMIU/mmiu_samples.json",
-        os.path.join(os.path.dirname(__file__), "..", "data", "MMIU", "mmiu_samples.json")
-    ]
-
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from MMIU-Benchmark (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from MMIU-Benchmark (all available)")
-                return samples
-        except Exception:
-            continue
-
-    print("MMIU-Benchmark dataset not found. Please run download_mmiu.py first.")
-    return []
-
-def load_mmmu(max_samples=None):
-    """Load MMMU dataset for multimodal benign samples (from HuggingFace parquet or legacy JSON)"""
-    import os
-    import random
-    import json
-    from datasets import load_dataset, DatasetDict
-    import glob
-
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_json_paths = [
-        "data/MMMU/mmmu_samples.json",
-        "../data/MMMU/mmmu_samples.json"
-    ]
-
-    # 1. Try legacy JSON
-    for path in possible_json_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
-
-                # Fix image paths to be relative to current working directory
-                for sample in samples:
-                    if sample.get('img'):
-                        img_path = sample['img']
-                        # If path doesn't exist, try different relative paths
-                        if not os.path.exists(img_path):
-                            # Try from parent directory (when running from code/)
-                            alt_path = os.path.join('..', img_path)
-                            if os.path.exists(alt_path):
-                                sample['img'] = alt_path
-
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from MMMU (legacy JSON, out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from MMMU (legacy JSON, all available)")
-                return samples
-        except Exception as e:
-            continue
-
-    # 2. Try loading from HuggingFace parquet files
-    cache_dir = os.path.abspath("./data/MMMU")
-    mmmu_domains = [
-        'Accounting', 'Agriculture', 'Architecture_and_Engineering', 'Art',
-        'Art_Theory', 'Basic_Medical_Science', 'Biology', 'Chemistry',
-        'Clinical_Medicine', 'Computer_Science', 'Design',
-        'Diagnostics_and_Laboratory_Medicine', 'Economics', 'Electronics',
-        'Energy_and_Power', 'Finance', 'Geography', 'History', 'Literature',
-        'Manage', 'Marketing', 'Materials', 'Math', 'Mechanical_Engineering',
-        'Music', 'Pharmacy', 'Physics', 'Psychology', 'Public_Health', 'Sociology'
-    ]
-    all_samples = []
-    for domain in mmmu_domains:
-        try:
-            ds = load_dataset("MMMU/MMMU", domain, split="validation", cache_dir=cache_dir, download_mode="reuse_cache_if_exists")
-            for sample in ds:
-                # Compose the sample dict in the same format as before
-                entry = {
-                    "id": sample.get("id", None),
-                    "txt": sample.get("question", ""),
-                    "img": None,  # Images are not downloaded by default
-                    "toxicity": 0,  # MMMU is benign
-                    "options": sample.get("options", []),
-                    "answer": sample.get("answer", None),
-                    "subject": domain
-                }
-                # If image_1 is a URL or bytes, you can add logic to download or reference it here if needed
-                all_samples.append(entry)
-        except Exception as e:
-            print(f"Warning: Could not load MMMU domain {domain}: {e}")
-            continue
-    total_available = len(all_samples)
-    if total_available == 0:
-        print("MMMU dataset not found. Please run download_mmmu.py first.")
-        return []
-    # Shuffle and sample if needed
-    random.seed(42)
-    random.shuffle(all_samples)
-    if max_samples and max_samples < total_available:
-        all_samples = all_samples[:max_samples]
-        print(f"Successfully loaded {len(all_samples)} samples from MMMU (HuggingFace, out of {total_available} available)")
-    else:
-        print(f"Successfully loaded {len(all_samples)} samples from MMMU (HuggingFace, all available)")
-    return all_samples
+# MMMU removed - not used in current experiments
