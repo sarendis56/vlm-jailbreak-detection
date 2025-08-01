@@ -1,0 +1,13 @@
+data/
+model/
+__pycache__/
+# *result*.csv
+download_model*
+# *pca.png
+# *tsne.png
+# *analysis.png
+cache/
+multi_run_results/
+results/
+*backup
+visualizations/
