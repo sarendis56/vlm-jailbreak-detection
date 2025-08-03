@@ -12,6 +12,12 @@ import json
 import sys
 from pathlib import Path
 
+try:
+    import pandas as pd
+    PANDAS_AVAILABLE = True
+except ImportError:
+    PANDAS_AVAILABLE = False
+
 def check_file_exists(filepath, description=""):
     """Check if a file exists and return status"""
     exists = os.path.exists(filepath)
@@ -53,6 +59,83 @@ def check_directory_exists(dirpath, description=""):
         print(f"      {description}")
     return exists
 
+def check_xstest_format():
+    """Special check for XSTest data format compatibility"""
+    print("  🔍 Checking XSTest data format compatibility:")
+
+    if not PANDAS_AVAILABLE:
+        print("    ⚠️  pandas not available - limited format checking")
+        json_path = "data/XSTest/xstest_samples.json"
+        if os.path.exists(json_path):
+            print(f"    ✅ JSON format found: {json_path}")
+            print(f"    💡 Install pandas for full format verification: pip install pandas")
+            return True
+        else:
+            print(f"    ❌ No XSTest data found")
+            return False
+
+    # Check for the expected parquet/CSV format (primary)
+    parquet_path = "data/XSTest/data/gpt4-00000-of-00001.parquet"
+    csv_path = "data/XSTest/data/gpt4-00000-of-00001.csv"
+    json_path = "data/XSTest/xstest_samples.json"
+
+    parquet_exists = os.path.exists(parquet_path)
+    csv_exists = os.path.exists(csv_path)
+    json_exists = os.path.exists(json_path)
+
+    if parquet_exists:
+        print(f"    ✅ Parquet format: {parquet_path}")
+        try:
+            df = pd.read_parquet(parquet_path)
+            required_cols = ['prompt', 'type']
+            if all(col in df.columns for col in required_cols):
+                print(f"    ✅ Required columns present: {required_cols}")
+                print(f"    ✅ Sample count: {len(df)} samples")
+
+                # Check toxicity distribution
+                contrast_count = len(df[df['type'].str.contains('contrast', na=False)])
+                safe_count = len(df) - contrast_count
+                print(f"    ✅ Distribution: {safe_count} safe, {contrast_count} unsafe samples")
+                return True
+            else:
+                print(f"    ❌ Missing required columns. Found: {list(df.columns)}")
+                return False
+        except Exception as e:
+            print(f"    ❌ Error reading parquet: {e}")
+            return False
+
+    elif csv_exists:
+        print(f"    ✅ CSV format: {csv_path}")
+        try:
+            df = pd.read_csv(csv_path)
+            required_cols = ['prompt', 'type']
+            if all(col in df.columns for col in required_cols):
+                print(f"    ✅ Required columns present: {required_cols}")
+                print(f"    ✅ Sample count: {len(df)} samples")
+
+                # Check toxicity distribution
+                contrast_count = len(df[df['type'].str.contains('contrast', na=False)])
+                safe_count = len(df) - contrast_count
+                print(f"    ✅ Distribution: {safe_count} safe, {contrast_count} unsafe samples")
+                return True
+            else:
+                print(f"    ❌ Missing required columns. Found: {list(df.columns)}")
+                return False
+        except Exception as e:
+            print(f"    ❌ Error reading CSV: {e}")
+            return False
+
+    elif json_exists:
+        print(f"    ⚠️  Only JSON format found: {json_path}")
+        print(f"    ⚠️  load_XSTest() expects parquet/CSV format")
+        print(f"    💡 Run: python download_datasets.py to update format")
+        return False
+
+    else:
+        print(f"    ❌ No XSTest data found in any format")
+        print(f"    💡 Run: python download_datasets.py to download")
+        return False
+
 def verify_datasets():
     """Verify all required datasets"""
     print("="*60)
@@ -69,10 +152,9 @@ def verify_datasets():
         ("data/AdvBench/advbench_samples.json", "AdvBench harmful prompts dataset"),
         ("data/DAN_Prompts/dan_prompts_samples.json", "DAN jailbreak prompts dataset"),
         ("data/OpenAssistant/openassistant_samples.json", "OpenAssistant conversational dataset"),
-        ("data/VQAv2/vqav2_samples.json", "VQAv2 visual question answering dataset"),
-        ("data/XSTest/xstest_samples.json", "XSTest safety evaluation dataset")
+        ("data/VQAv2/vqav2_samples.json", "VQAv2 visual question answering dataset")
     ]
-    
+
     auto_count = 0
     for filepath, description in auto_datasets:
         if check_file_exists(filepath, f"Run: python download_datasets.py"):
@@ -85,6 +167,13 @@ def verify_datasets():
             except:
                 print(f"      Could not read sample count")
         datasets_status[filepath] = os.path.exists(filepath)
+
+    # Special handling for XSTest (multiple format support)
+    print(f"\n  📋 XSTest safety evaluation dataset:")
+    xstest_ok = check_xstest_format()
+    if xstest_ok:
+        auto_count += 1
+    datasets_status["XSTest"] = xstest_ok
     
     # Manual datasets
     print("\n🔧 Manual Downloads Required:")
@@ -120,12 +209,12 @@ def verify_datasets():
         datasets_status[dirpath] = os.path.exists(dirpath)
     
     print(f"\n📊 Dataset Summary:")
-    print(f"  Automatic datasets: {auto_count}/{len(auto_datasets)} ✅")
+    print(f"  Automatic datasets: {auto_count}/{len(auto_datasets) + 1} ✅")  # +1 for XSTest
     print(f"  Manual files: {manual_count}/{len(manual_datasets)} ✅")
     print(f"  Manual directories: {manual_dir_count}/{len(manual_dirs)} ✅")
-    
+
     total_available = auto_count + manual_count + manual_dir_count
-    total_required = len(auto_datasets) + len(manual_datasets) + len(manual_dirs)
+    total_required = len(auto_datasets) + 1 + len(manual_datasets) + len(manual_dirs)  # +1 for XSTest
     
     return total_available, total_required, datasets_status
 
@@ -181,8 +270,8 @@ def test_basic_loading():
     print("\n📚 Testing Dataset Loading:")
     try:
         sys.path.append('code')
-        from load_datasets import load_alpaca, load_mm_vet
-        
+        from load_datasets import load_alpaca, load_mm_vet, load_XSTest, load_dan_prompts
+
         # Test Alpaca loading
         try:
             alpaca_samples = load_alpaca(max_samples=5)
@@ -192,7 +281,29 @@ def test_basic_loading():
                 print(f"  ❌ Alpaca: No samples loaded")
         except Exception as e:
             print(f"  ❌ Alpaca: Error loading - {e}")
-        
+
+        # Test DAN prompts loading
+        try:
+            dan_samples = load_dan_prompts(max_samples=5)
+            if dan_samples:
+                print(f"  ✅ DAN Prompts: Loaded {len(dan_samples)} test samples")
+            else:
+                print(f"  ❌ DAN Prompts: No samples loaded")
+        except Exception as e:
+            print(f"  ❌ DAN Prompts: Error loading - {e}")
+
+        # Test XSTest loading (new format)
+        try:
+            xstest_samples = load_XSTest()
+            if xstest_samples:
+                safe_count = len([s for s in xstest_samples if s.get('toxicity', 0) == 0])
+                unsafe_count = len([s for s in xstest_samples if s.get('toxicity', 0) == 1])
+                print(f"  ✅ XSTest: Loaded {len(xstest_samples)} samples ({safe_count} safe, {unsafe_count} unsafe)")
+            else:
+                print(f"  ❌ XSTest: No samples loaded")
+        except Exception as e:
+            print(f"  ❌ XSTest: Error loading - {e}")
+
         # Test MM-Vet loading
         try:
             mmvet_samples = load_mm_vet()
@@ -202,7 +313,7 @@ def test_basic_loading():
                 print(f"  ❌ MM-Vet: No samples loaded")
         except Exception as e:
             print(f"  ❌ MM-Vet: Error loading - {e}")
-            
+
     except ImportError as e:
         print(f"  ❌ Could not import dataset loading functions: {e}")
     

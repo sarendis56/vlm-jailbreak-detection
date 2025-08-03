@@ -547,12 +547,28 @@ def load_advbench(max_samples=None):
 # AlpacaToxicQA removed - not used in current experiments
 
 def load_dan_prompts(max_samples=None):
-    """Load DAN (Do Anything Now) jailbreak prompts"""
+    """Load DAN (Do Anything Now) jailbreak prompts from TrustAIRLab/in-the-wild-jailbreak-prompts"""
     import json
 
     try:
         with open("data/DAN_Prompts/dan_prompts_samples.json", 'r', encoding='utf-8') as f:
             samples = json.load(f)
+
+        # Validate that samples have the expected format
+        if samples and isinstance(samples[0], dict):
+            # Check if this is the new format with rich metadata
+            sample_keys = samples[0].keys()
+            if 'platform' in sample_keys and 'source' in sample_keys:
+                print(f"Loaded enhanced jailbreak dataset with metadata (platforms, sources, timestamps)")
+
+            # Ensure all samples have required fields
+            valid_samples = []
+            for sample in samples:
+                if isinstance(sample, dict) and 'txt' in sample and sample['txt']:
+                    valid_samples.append(sample)
+
+            samples = valid_samples
+            print(f"Filtered to {len(samples)} valid jailbreak prompts")
 
         total_available = len(samples)
         if max_samples and max_samples < total_available:
@@ -563,7 +579,7 @@ def load_dan_prompts(max_samples=None):
         return samples
 
     except FileNotFoundError:
-        print("DAN Prompts dataset not found. Please run download_large_scale_datasets.py first.")
+        print("DAN Prompts dataset not found. Please run download_datasets.py first.")
         return []
     except Exception as e:
         print(f"Error loading DAN Prompts: {e}")
