@@ -64,12 +64,61 @@ def load_mm_vet(json_path = "data/MM-Vet/mm-vet.json"):
     dataset = []
     try:
         with open(json_path, "r") as f:
-            dataset = json.load(f)
+            raw_data = json.load(f)
+
+        # Convert raw MM-Vet data to proper sample format
+        if isinstance(raw_data, dict):
+            # MM-Vet is typically a dict with question IDs as keys
+            for qid, item in raw_data.items():
+                if isinstance(item, dict):
+                    # Extract question text and image path
+                    question = item.get('question', item.get('text', ''))
+                    image_path = item.get('image', item.get('image_path', None))
+
+                    sample = {
+                        "txt": question,
+                        "img": image_path,
+                        "toxicity": 0,  # MM-Vet is benign
+                        "question_id": qid
+                    }
+                    dataset.append(sample)
+                elif isinstance(item, str):
+                    # If item is just a string (question)
+                    sample = {
+                        "txt": item,
+                        "img": None,
+                        "toxicity": 0,
+                        "question_id": qid
+                    }
+                    dataset.append(sample)
+        elif isinstance(raw_data, list):
+            # If it's already a list of samples
+            for i, item in enumerate(raw_data):
+                if isinstance(item, dict):
+                    # Ensure proper format
+                    sample = {
+                        "txt": item.get('question', item.get('text', item.get('txt', ''))),
+                        "img": item.get('image', item.get('image_path', item.get('img', None))),
+                        "toxicity": item.get('toxicity', 0),
+                        "question_id": item.get('question_id', f"mmvet_{i}")
+                    }
+                    dataset.append(sample)
+                else:
+                    # Convert string to sample
+                    sample = {
+                        "txt": str(item),
+                        "img": None,
+                        "toxicity": 0,
+                        "question_id": f"mmvet_{i}"
+                    }
+                    dataset.append(sample)
+
         print(f"Successfully built MM-Vet dataset with {len(dataset)} samples.")
+        return dataset
+
     except Exception as e:
         print(f"Error loading MM-Vet: {e}")
         return []
-    return dataset
 
 
     
@@ -256,7 +305,13 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
     """
     unsafe_set = []
     # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_base_paths = ["data/JailBreakV-28K", "../data/JailBreakV-28K"]
+    # Also try lowercase 'k' variant
+    possible_base_paths = [
+        "data/JailBreakV-28K",
+        "../data/JailBreakV-28K",
+        "data/JailBreakV-28k",  # lowercase k
+        "../data/JailBreakV-28k"
+    ]
     base_path = None
 
     for path in possible_base_paths:
@@ -643,6 +698,10 @@ def load_vqav2(max_samples=None):
 
     print("VQAv2 dataset not found.")
     return []
+
+def load_dan_jailbreak_prompts(max_samples=None):
+    """Alias for load_dan_prompts for backward compatibility"""
+    return load_dan_prompts(max_samples=max_samples)
 
 # ShareGPT, LIMA, TruthfulQA, and HarmBench removed - not used in current experiments
 
