@@ -35,7 +35,7 @@ class ProjectionConfig:
     PROJECTION_MODE = "single_layer"  # Change this to switch modes
 
     # Single layer mode settings
-    SINGLE_LAYER_TRAINING_LAYER = 18  # Which layer to use for training projection
+    SINGLE_LAYER_TRAINING_LAYER = 16  # Which layer to use for training projection
 
     # Training hyperparameters
     PROJECTION_EPOCHS = 200
@@ -548,7 +548,7 @@ def compute_optimal_shrinkage(X, sample_cov):
 
     return lambda_opt
 
-def enhanced_ledoit_wolf_covariance(X, min_samples=50):
+def enhanced_ledoit_wolf_covariance(X, min_samples=5):
     """Enhanced Ledoit-Wolf covariance estimator with minimum sample size validation"""
     n, d = X.shape
 
@@ -582,9 +582,9 @@ def enhanced_ledoit_wolf_covariance(X, min_samples=50):
 
 def ledoit_wolf_covariance(X):
     """Original Ledoit-Wolf covariance estimator"""
-    return enhanced_ledoit_wolf_covariance(X, min_samples=50)
+    return enhanced_ledoit_wolf_covariance(X, min_samples=5)
 
-def enhanced_ledoit_wolf_covariance_gpu(X, min_samples=50, device=None):
+def enhanced_ledoit_wolf_covariance_gpu(X, min_samples=5, device=None):
     """GPU-accelerated Enhanced Ledoit-Wolf covariance estimator with minimum sample size validation"""
     if device is None:
         device = GPU_DEVICE
@@ -1072,7 +1072,7 @@ def prepare_ood_data_structure(datasets_dict, hidden_states_dict, labels_dict):
     return in_dist_data, ood_data
 
 
-def prepare_kmeans_data_structure(datasets_dict, hidden_states_dict, labels_dict, random_seed=42):
+def prepare_kmeans_data_structure(datasets_dict, hidden_states_dict, labels_dict, random_seed=42, k_benign=None, k_malicious=None):
     """
     Prepare data structure using k-means clustering instead of dataset-based grouping.
 
@@ -1081,6 +1081,8 @@ def prepare_kmeans_data_structure(datasets_dict, hidden_states_dict, labels_dict
         hidden_states_dict: Dict of dataset names to features
         labels_dict: Dict of dataset names to labels
         random_seed: Random seed for k-means clustering
+        k_benign: Number of clusters for benign samples (if None, use dataset count)
+        k_malicious: Number of clusters for malicious samples (if None, use dataset count)
 
     Returns:
         in_dist_data: Dict of {cluster_name: list_of_features} for benign clusters
@@ -1112,15 +1114,21 @@ def prepare_kmeans_data_structure(datasets_dict, hidden_states_dict, labels_dict
             all_malicious_features.extend(malicious_features)
             malicious_dataset_count += 1
 
+    # Use provided k values or default to dataset counts
+    if k_benign is None:
+        k_benign = benign_dataset_count
+    if k_malicious is None:
+        k_malicious = malicious_dataset_count
+
     print(f"  K-means clustering: {len(all_benign_features)} benign samples from {benign_dataset_count} datasets")
     print(f"  K-means clustering: {len(all_malicious_features)} malicious samples from {malicious_dataset_count} datasets")
+    print(f"  Using k_benign={k_benign}, k_malicious={k_malicious}")
 
     in_dist_data = {}
     ood_data = {}
 
-    # Apply k-means clustering to benign samples (k = number of benign datasets)
-    if len(all_benign_features) > 0 and benign_dataset_count > 0:
-        k_benign = benign_dataset_count
+    # Apply k-means clustering to benign samples
+    if len(all_benign_features) > 0 and k_benign > 0:
         if len(all_benign_features) >= k_benign:
             print(f"  Applying k-means with k={k_benign} to benign samples...")
             benign_features_array = np.array(all_benign_features)
@@ -1141,9 +1149,8 @@ def prepare_kmeans_data_structure(datasets_dict, hidden_states_dict, labels_dict
             # Fallback: use all samples as one cluster
             in_dist_data["benign_cluster_0"] = all_benign_features
 
-    # Apply k-means clustering to malicious samples (k = number of malicious datasets)
-    if len(all_malicious_features) > 0 and malicious_dataset_count > 0:
-        k_malicious = malicious_dataset_count
+    # Apply k-means clustering to malicious samples
+    if len(all_malicious_features) > 0 and k_malicious > 0:
         if len(all_malicious_features) >= k_malicious:
             print(f"  Applying k-means with k={k_malicious} to malicious samples...")
             malicious_features_array = np.array(all_malicious_features)
