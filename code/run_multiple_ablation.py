@@ -144,16 +144,33 @@ def run_single_experiment(script_path, seed, run_id, total_runs, working_dir):
         except:
             pass  # Ignore cleanup errors
 
-def load_results_csv(csv_path):
-    """Load results from CSV file"""
+def load_results_csv(csv_path, script_type='projection'):
+    """Load results from CSV file and normalize format"""
     try:
         df = pd.read_csv(csv_path)
+
+        # Normalize different CSV formats to standard format
+        if script_type in ['kcd_pca', 'mcd_pca']:
+            # PCA scripts have "PCA_Components" column, need to add "Method" column
+            if 'Method' not in df.columns and 'PCA_Components' in df.columns:
+                # Determine method from script type
+                method_name = 'KCD' if script_type == 'kcd_pca' else 'MCD'
+                df['Method'] = method_name
+                # Create a combined identifier for PCA experiments
+                df['PCA_Method'] = df['Method'] + '_PCA_' + df['PCA_Components'].astype(str)
+        elif script_type == 'kcd_k':
+            # K ablation script has "K_Value" instead of "Method"
+            if 'Method' not in df.columns and 'K_Value' in df.columns:
+                df['Method'] = 'KCD'
+                # Create a combined identifier for K experiments
+                df['K_Method'] = df['Method'] + '_K_' + df['K_Value'].astype(str)
+
         return df
     except Exception as e:
         print(f"Error loading {csv_path}: {e}")
         return None
 
-def aggregate_results_group(results_list, method_name, metric_group, group_name):
+def aggregate_results_group(results_list, method_name, metric_group, group_name, script_type='projection'):
     """Aggregate results for a specific group of metrics"""
     if not results_list:
         return None
@@ -166,11 +183,24 @@ def aggregate_results_group(results_list, method_name, metric_group, group_name)
         if col in all_results.columns:
             all_results[col] = pd.to_numeric(all_results[col], errors='coerce')
 
-    # Group and aggregate by Layer and Dataset
-    aggregated_results = []
-    grouped = all_results.groupby(['Layer', 'Dataset'])
+    # Determine grouping columns based on script type
+    if script_type in ['kcd_pca', 'mcd_pca']:
+        group_cols = ['Layer', 'Dataset', 'PCA_Components']
+    elif script_type == 'kcd_k':
+        group_cols = ['Layer', 'Dataset', 'K_Value']
+    else:
+        group_cols = ['Layer', 'Dataset']
 
-    for (layer, dataset), group in grouped:
+    # Group and aggregate
+    aggregated_results = []
+    grouped = all_results.groupby(group_cols)
+
+    for group_key, group in grouped:
+        if len(group_cols) == 3:
+            layer, dataset, param_value = group_key
+        else:
+            layer, dataset = group_key
+            param_value = None
         result_row = {
             'Layer': layer,
             'Dataset': dataset,
@@ -178,6 +208,12 @@ def aggregate_results_group(results_list, method_name, metric_group, group_name)
             'Group': group_name,
             'Runs': len(group)
         }
+
+        # Add parameter-specific columns
+        if script_type in ['kcd_pca', 'mcd_pca']:
+            result_row['PCA_Components'] = param_value
+        elif script_type == 'kcd_k':
+            result_row['K_Value'] = param_value
 
         # Compute mean, std, and max/min for each metric
         for col in metric_group:
@@ -232,7 +268,7 @@ def aggregate_results_group(results_list, method_name, metric_group, group_name)
 
     return df
 
-def aggregate_results(results_list, method_name):
+def aggregate_results(results_list, method_name, script_type='projection'):
     """Aggregate results into two focused groups"""
     if not results_list:
         return None, None
@@ -242,17 +278,17 @@ def aggregate_results(results_list, method_name):
     group2_metrics = ['TPR', 'FPR', 'F1']            # Classification metrics
 
     # Create aggregated results for each group
-    group1_df = aggregate_results_group(results_list, method_name, group1_metrics, "Performance")
-    group2_df = aggregate_results_group(results_list, method_name, group2_metrics, "Classification")
+    group1_df = aggregate_results_group(results_list, method_name, group1_metrics, "Performance", script_type)
+    group2_df = aggregate_results_group(results_list, method_name, group2_metrics, "Classification", script_type)
 
     return group1_df, group2_df
 
 def main():
     parser = argparse.ArgumentParser(description='Run multiple ablation experiments with different seeds')
-    parser.add_argument('--script', required=True, choices=['kcd', 'mcd', 'both'],
-                       help='Which ablation script to run (kcd, mcd, or both)')
-    parser.add_argument('--runs', type=int, default=50,
-                       help='Number of runs (default: 50)')
+    parser.add_argument('--script', required=True, choices=['kcd', 'mcd', 'kcd_pca', 'mcd_pca', 'kcd_k'],
+                       help='Which ablation script to run (kcd, mcd, kcd_pca, mcd_pca, or kcd_k)')
+    parser.add_argument('--runs', type=int, default=20,
+                       help='Number of runs (default: 20)')
     parser.add_argument('--seeds', nargs='+', type=int,
                        help='Custom seeds to use (if not provided, will use consecutive seeds starting from 42)')
     parser.add_argument('--output-dir', default='ablation_results',
@@ -263,7 +299,9 @@ def main():
 Examples:
   python run_multiple_ablation.py --script kcd --runs 10
   python run_multiple_ablation.py --script mcd --runs 5 --seeds 42 43 44 45 46
-  python run_multiple_ablation.py --script both --runs 20
+  python run_multiple_ablation.py --script kcd_pca --runs 20
+  python run_multiple_ablation.py --script mcd_pca --runs 15
+  python run_multiple_ablation.py --script kcd_k --runs 10
   python run_multiple_ablation.py --script kcd --runs 30 --output-dir my_ablation_results
 """
 
@@ -279,11 +317,12 @@ Examples:
         scripts_to_run = [('kcd', script_dir / 'balanced_ood_kcd_ablate_projection.py', 'results/balanced_kcd_ablate_projection_results.csv', 'KCD_Ablation_MultiSeed')]
     elif args.script == 'mcd':
         scripts_to_run = [('mcd', script_dir / 'balanced_ood_mcd_ablate_projection.py', 'results/balanced_mcd_ablate_projection_results.csv', 'MCD_Ablation_MultiSeed')]
-    else:  # both
-        scripts_to_run = [
-            ('kcd', script_dir / 'balanced_ood_kcd_ablate_projection.py', 'results/balanced_kcd_ablate_projection_results.csv', 'KCD_Ablation_MultiSeed'),
-            ('mcd', script_dir / 'balanced_ood_mcd_ablate_projection.py', 'results/balanced_mcd_ablate_projection_results.csv', 'MCD_Ablation_MultiSeed')
-        ]
+    elif args.script == 'kcd_pca':
+        scripts_to_run = [('kcd_pca', script_dir / 'balanced_ood_kcd_ablate_pca.py', 'results/balanced_kcd_pca_ablation_results.csv', 'KCD_PCA_Ablation_MultiSeed')]
+    elif args.script == 'mcd_pca':
+        scripts_to_run = [('mcd_pca', script_dir / 'balanced_ood_mcd_ablate_pca.py', 'results/balanced_mcd_pca_ablation_results.csv', 'MCD_PCA_Ablation_MultiSeed')]
+    elif args.script == 'kcd_k':
+        scripts_to_run = [('kcd_k', script_dir / 'balanced_ood_kcd_ablate_k.py', 'results/kcd_k_ablation_results.csv', 'KCD_K_Ablation_MultiSeed')]
 
     # Verify all scripts exist
     for script_name, script_path, _, _ in scripts_to_run:
@@ -374,7 +413,7 @@ Examples:
                     print(f"Results moved: {csv_source} -> {csv_dest}")
 
                     # Load and store results
-                    df = load_results_csv(csv_dest)
+                    df = load_results_csv(csv_dest, script_name)
                     if df is not None:
                         df['Run'] = i
                         df['Seed'] = seed
@@ -397,7 +436,7 @@ Examples:
         print(f"{'='*80}")
 
         # Aggregate results for this script
-        group1_df, group2_df = aggregate_results(individual_results, method_name)
+        group1_df, group2_df = aggregate_results(individual_results, method_name, script_name)
 
         if group1_df is not None and group2_df is not None:
             # Save aggregated results for both groups
@@ -450,7 +489,17 @@ Examples:
     print(f"\n{'='*100}")
     print("ABLATION EXPERIMENT SUMMARY")
     print(f"{'='*100}")
-    print(f"Experiment type: {args.script.upper()} ablation (no learned projection)")
+
+    # Determine experiment description
+    experiment_descriptions = {
+        'kcd': 'KCD ablation (no learned projection)',
+        'mcd': 'MCD ablation (no learned projection)',
+        'kcd_pca': 'KCD ablation with PCA dimensionality reduction',
+        'mcd_pca': 'MCD ablation with PCA dimensionality reduction',
+        'kcd_k': 'KCD ablation with K-value parameter sweep'
+    }
+
+    print(f"Experiment type: {experiment_descriptions.get(args.script, args.script.upper())} ablation")
     print(f"Total runs per method: {args.runs}")
     print(f"Seeds used: {seeds}")
     print(f"Results directory: {run_dir}")

@@ -569,7 +569,7 @@ class KCDDetector:
     4. Enhanced with GPU acceleration for distance computation
     """
 
-    def __init__(self, k=50, use_gpu=True, normalization=True):
+    def __init__(self, k, use_gpu=True, normalization=True):
         """
         Initialize KCD detector.
 
@@ -674,17 +674,6 @@ class KCDDetector:
         print(f"  Total benign training samples: {len(self.benign_features)}")
         print(f"  Total malicious training samples: {len(self.malicious_features)}")
         print(f"  Feature dimension: {self.benign_features.shape[1]}")
-
-        # Adjust k based on smaller training set size (more conservative)
-        # min_training_size = min(len(self.benign_features), len(self.malicious_features))
-        # if min_training_size < 5000:
-        #     self.k = min(50, min_training_size - 1)  # Small dataset
-        # elif min_training_size < 20000:
-        #     self.k = min(200, min_training_size - 1)  # Medium dataset
-        # else:
-        #     self.k = min(1000, min_training_size - 1)  # Large dataset
-
-        print(f"  Finalized: k={self.k}")
 
     def compute_kcd_score(self, x):
         """
@@ -1126,7 +1115,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     # Set random seed for reproducibility (use consistent seed)
-    MAIN_SEED = 46  # Match the seed used elsewhere in the script
+    MAIN_SEED = 42  # Match the seed used elsewhere in the script
     random.seed(MAIN_SEED)
     np.random.seed(MAIN_SEED)
     torch.manual_seed(MAIN_SEED)
@@ -1335,17 +1324,7 @@ def main():
             {k: v for k, v in layer_labels.items() if k in in_dist_datasets}
         )
 
-        # Initialize and train KCD detector with GPU acceleration
-        # Determine k based on training set size
-        total_benign_samples = sum(len(features) for features in benign_data.values())
-        if total_benign_samples < 5000:
-            k = 50  # Small dataset (our case)
-        elif total_benign_samples < 20000:
-            k = 200  # Medium dataset
-        else:
-            k = 1000  # Large dataset
-
-        detector = KCDDetector(k=k, use_gpu=True, normalization=True)
+        detector = KCDDetector(k=50, use_gpu=True, normalization=True)
 
         # Prepare malicious training data from OOD datasets
         malicious_data = {}

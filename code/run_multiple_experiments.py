@@ -466,8 +466,8 @@ def main():
     parser = argparse.ArgumentParser(description='Run multiple experiments with different seeds')
     parser.add_argument('--script', required=True, choices=['mcd', 'kcd', 'ml', 'learned-ml', 'pca-ml'],
                        help='Which script to run (mcd, kcd, ml, learned-ml, or pca-ml)')
-    parser.add_argument('--runs', type=int, default=50,
-                       help='Number of runs (default: 50)')
+    parser.add_argument('--runs', type=int, default=20,
+                       help='Number of runs (default: 20)')
     parser.add_argument('--seeds', nargs='+', type=int,
                        help='Custom seeds to use (if not provided, will use consecutive seeds starting from 42)')
     parser.add_argument('--output-dir', default='multi_run_results',
