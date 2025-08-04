@@ -1798,7 +1798,7 @@ def main():
     layer_individual_avg_scores.sort(key=lambda x: x[1], reverse=True)
 
     # Save results to CSV
-    output_path = "results/balanced_mcd_results.csv"
+    output_path = "results/balanced_mcd_kmeans_results.csv"
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Layer", "Dataset", "Method", "Accuracy", "F1", "TPR", "FPR", "AUROC", "AUPRC", "Threshold", "Combined_Rank", "Individual_Rank"])

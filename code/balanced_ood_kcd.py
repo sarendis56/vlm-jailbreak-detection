@@ -1126,7 +1126,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     # Set random seed for reproducibility (use consistent seed)
-    MAIN_SEED = 47  # Match the seed used elsewhere in the script
+    MAIN_SEED = 46  # Match the seed used elsewhere in the script
     random.seed(MAIN_SEED)
     np.random.seed(MAIN_SEED)
     torch.manual_seed(MAIN_SEED)
