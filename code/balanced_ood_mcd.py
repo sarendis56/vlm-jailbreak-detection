@@ -41,7 +41,7 @@ class ProjectionConfig:
     PROJECTION_BATCH_SIZE = 64
     PROJECTION_LEARNING_RATE = 1e-3
     PROJECTION_LR_SCHEDULER = 'cosine'
-    PROJECTION_MAX_PATIENCE = 30
+    PROJECTION_MAX_PATIENCE = 15
 
     # Architecture settings
     INPUT_DIM = 4096
@@ -108,6 +108,324 @@ def get_gpu_memory_info():
         reserved = torch.cuda.memory_reserved() / 1024**3   # GB
         return f"GPU Memory: {allocated:.1f}GB allocated, {reserved:.1f}GB reserved"
     return "GPU not available"
+
+class LearnedProjection(nn.Module):
+    """
+    Learned projection from 4096 to 256 dimensions with multi-objective loss:
+    1. Samples from same dataset should be close
+    2. Samples from different datasets should be far
+    3. Benign centroids should be close, malicious centroids should be close,
+       but benign and malicious centroids should be far apart
+    """
+
+    def __init__(self, input_dim=None, output_dim=None, hidden_dim=None, dropout=None):
+        super(LearnedProjection, self).__init__()
+
+        # Use config defaults if not specified
+        input_dim = input_dim or CONFIG.INPUT_DIM
+        output_dim = output_dim or CONFIG.OUTPUT_DIM
+        hidden_dim = hidden_dim or CONFIG.HIDDEN_DIM
+        dropout = dropout or CONFIG.DROPOUT
+
+        # Multi-layer projection network
+        self.projection = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.BatchNorm1d(hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+
+            nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.BatchNorm1d(hidden_dim // 2),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+
+            nn.Linear(hidden_dim // 2, output_dim),
+            nn.BatchNorm1d(output_dim)
+        )
+
+        # Initialize weights
+        self._init_weights()
+
+    def _init_weights(self):
+        """Initialize weights using Xavier initialization"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.constant_(m.bias, 0)
+
+    def forward(self, x):
+        """Forward pass through projection network"""
+        return self.projection(x)
+
+def train_learned_projection(features_dict, labels_dict, input_dim=None, output_dim=None,
+                           epochs=None, batch_size=None, learning_rate=None, device=None,
+                           lr_scheduler=None, random_seed=42):
+    """
+    Train the learned projection network
+
+    Args:
+        features_dict: Dict of {dataset_name: features_array}
+        labels_dict: Dict of {dataset_name: labels_array}
+        input_dim: Input feature dimension (4096)
+        output_dim: Output feature dimension (256)
+        epochs: Number of training epochs
+        batch_size: Training batch size
+        learning_rate: Initial learning rate
+        device: GPU device
+        lr_scheduler: Learning rate scheduler type ('cosine', 'exponential', 'step')
+        random_seed: Random seed for reproducibility
+
+    Returns:
+        trained_model: Trained projection model
+        dataset_name_to_id: Mapping of dataset names to IDs
+    """
+    # Use config defaults if not specified
+    input_dim = input_dim or CONFIG.INPUT_DIM
+    output_dim = output_dim or CONFIG.OUTPUT_DIM
+    epochs = epochs or CONFIG.PROJECTION_EPOCHS
+    batch_size = batch_size or CONFIG.PROJECTION_BATCH_SIZE
+    learning_rate = learning_rate or CONFIG.PROJECTION_LEARNING_RATE
+    lr_scheduler = lr_scheduler or CONFIG.PROJECTION_LR_SCHEDULER
+
+    if device is None:
+        device = GPU_DEVICE
+
+    # Set random seeds for reproducibility
+    torch.manual_seed(random_seed)
+    torch.cuda.manual_seed(random_seed)
+    torch.cuda.manual_seed_all(random_seed)
+    np.random.seed(random_seed)
+    random.seed(random_seed)
+
+    # Ensure deterministic behavior
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+    print(f"Training learned projection: {input_dim} -> {output_dim} dimensions")
+    print(f"Device: {device}, Epochs: {epochs}, Batch size: {batch_size}, LR: {learning_rate}")
+    print(f"Random seed: {random_seed} (deterministic mode enabled)")
+
+    # Prepare training data
+    all_features = []
+    all_dataset_labels = []
+    all_toxicity_labels = []
+    dataset_name_to_id = {}
+
+    dataset_id = 0
+    for dataset_name, features in features_dict.items():
+        if dataset_name not in labels_dict:
+            continue
+
+        features_array = np.array(features)
+        labels_array = np.array(labels_dict[dataset_name])
+
+        if len(features_array) != len(labels_array):
+            print(f"Warning: Feature-label mismatch for {dataset_name}: {len(features_array)} vs {len(labels_array)}")
+            continue
+
+        # Assign dataset ID
+        if dataset_name not in dataset_name_to_id:
+            dataset_name_to_id[dataset_name] = dataset_id
+            dataset_id += 1
+
+        all_features.append(features_array)
+        all_dataset_labels.extend([dataset_name_to_id[dataset_name]] * len(features_array))
+        all_toxicity_labels.extend(labels_array.tolist())
+
+        print(f"  {dataset_name}: {len(features_array)} samples, dataset_id={dataset_name_to_id[dataset_name]}")
+
+    # Convert to tensors
+    all_features = np.vstack(all_features)
+    all_dataset_labels = np.array(all_dataset_labels)
+    all_toxicity_labels = np.array(all_toxicity_labels)
+
+    print(f"Total training samples: {len(all_features)}")
+    print(f"Feature shape: {all_features.shape}")
+    print(f"Unique datasets: {len(dataset_name_to_id)}")
+    print(f"Toxicity distribution: {np.bincount(all_toxicity_labels)}")
+
+    # Create data loader
+    features_tensor = torch.FloatTensor(all_features).to(device)
+    dataset_labels_tensor = torch.LongTensor(all_dataset_labels).to(device)
+    toxicity_labels_tensor = torch.LongTensor(all_toxicity_labels).to(device)
+
+    dataset = TensorDataset(features_tensor, dataset_labels_tensor, toxicity_labels_tensor)
+
+    # Create generator with fixed seed for reproducible shuffling
+    generator = torch.Generator()
+    generator.manual_seed(random_seed)
+
+    dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=True, drop_last=True,
+                          generator=generator, worker_init_fn=lambda worker_id: np.random.seed(random_seed + worker_id))
+
+    # Initialize model
+    model = LearnedProjection(input_dim=input_dim, output_dim=output_dim).to(device)
+
+    # Initialize optimizer with deterministic behavior
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=1e-4)
+
+    # Ensure model initialization is deterministic by re-seeding before model creation
+    torch.manual_seed(random_seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(random_seed)
+
+    # Multiple learning rate schedulers for better training dynamics
+    # 1. Cosine annealing for smooth decay
+    cosine_scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs, eta_min=learning_rate*0.01)
+    # 2. ReduceLROnPlateau for adaptive reduction when loss plateaus
+    plateau_scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=15, verbose=True)
+    # 3. Exponential decay for consistent reduction
+    exp_scheduler = optim.lr_scheduler.ExponentialLR(optimizer, gamma=0.98)
+    # 4. Step decay
+    step_scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=30, gamma=0.5)
+
+    # Select scheduler based on parameter
+    if lr_scheduler == 'cosine':
+        scheduler = cosine_scheduler
+        print(f"Using Cosine Annealing LR scheduler (eta_min={learning_rate*0.01:.6f})")
+    elif lr_scheduler == 'exponential':
+        scheduler = exp_scheduler
+        print(f"Using Exponential LR scheduler (gamma=0.98)")
+    elif lr_scheduler == 'step':
+        scheduler = step_scheduler
+        print(f"Using Step LR scheduler (step_size=30, gamma=0.5)")
+    else:
+        scheduler = cosine_scheduler  # Default
+        print(f"Using default Cosine Annealing LR scheduler")
+
+    # Training loop
+    model.train()
+    best_loss = float('inf')
+    patience_counter = 0
+    max_patience = 20
+    prev_lr = learning_rate
+
+    for epoch in range(epochs):
+        epoch_loss = 0.0
+        epoch_dataset_loss = 0.0
+        epoch_toxicity_loss = 0.0
+        num_batches = 0
+
+        for batch_features, batch_dataset_labels, batch_toxicity_labels in dataloader:
+            optimizer.zero_grad()
+
+            # Forward pass
+            embeddings = model(batch_features)
+
+            # Compute loss
+            total_loss, dataset_loss, toxicity_loss = compute_contrastive_loss(
+                embeddings, batch_dataset_labels, batch_toxicity_labels
+            )
+
+            # Backward pass
+            total_loss.backward()
+
+            # Gradient clipping for stability
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            optimizer.step()
+
+            # Accumulate losses
+            epoch_loss += total_loss.item()
+            epoch_dataset_loss += dataset_loss if isinstance(dataset_loss, (int, float)) else dataset_loss.item()
+            epoch_toxicity_loss += toxicity_loss if isinstance(toxicity_loss, (int, float)) else toxicity_loss.item()
+            num_batches += 1
+
+        # Average losses
+        avg_loss = epoch_loss / num_batches
+        avg_dataset_loss = epoch_dataset_loss / num_batches
+        avg_toxicity_loss = epoch_toxicity_loss / num_batches
+
+        # Learning rate scheduling
+        scheduler.step()  # Cosine annealing doesn't need loss parameter
+
+        # Also apply plateau scheduler for adaptive reduction
+        plateau_scheduler.step(avg_loss)
+
+        # Print progress with learning rate information
+        current_lr = optimizer.param_groups[0]['lr']
+        if (epoch + 1) % 30 == 0 or epoch == 0:
+            # Calculate weighted components for display
+            weighted_dataset = CONFIG.DATASET_LOSS_WEIGHT * avg_dataset_loss
+            weighted_toxicity = CONFIG.TOXICITY_LOSS_WEIGHT * avg_toxicity_loss
+            print(f"Epoch {epoch+1}/{epochs}: Loss={avg_loss:.4f} "
+                  f"(Dataset={avg_dataset_loss:.4f}*{CONFIG.DATASET_LOSS_WEIGHT}={weighted_dataset:.4f}, "
+                  f"Toxicity={avg_toxicity_loss:.4f}*{CONFIG.TOXICITY_LOSS_WEIGHT}={weighted_toxicity:.4f}), "
+                  f"LR={current_lr:.6f}")
+
+        # Log learning rate changes, every 20 epochs
+        if epoch > 0 and abs(current_lr - prev_lr) and epoch % 20 == 0 > 1e-8:
+            print(f"  Learning rate changed: {prev_lr:.6f} -> {current_lr:.6f}")
+        prev_lr = current_lr
+
+        # Early stopping
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            patience_counter = 0
+        else:
+            patience_counter += 1
+
+        if patience_counter >= max_patience:
+            print(f"Early stopping at epoch {epoch+1}")
+            break
+
+    print(f"Training completed. Best loss: {best_loss:.4f}")
+
+    # Set model to evaluation mode
+    model.eval()
+
+    return model, dataset_name_to_id
+
+def apply_learned_projection(model, features_dict, device=None):
+    """
+    Apply the learned projection to transform features from 4096 to 256 dimensions
+
+    Args:
+        model: Trained projection model
+        features_dict: Dict of {dataset_name: features_array}
+        device: GPU device
+
+    Returns:
+        projected_features_dict: Dict of {dataset_name: projected_features_array}
+    """
+    if device is None:
+        device = GPU_DEVICE
+
+    model.eval()
+    projected_features_dict = {}
+
+    # print("Applying learned projection to features...")
+
+    with torch.no_grad():
+        for dataset_name, features in features_dict.items():
+            features_array = np.array(features)
+            # print(f"  Projecting {dataset_name}: {features_array.shape} -> ", end="")
+
+            # Convert to tensor and project in batches to manage memory
+            batch_size = 1000
+            projected_features = []
+
+            for i in range(0, len(features_array), batch_size):
+                batch_features = features_array[i:i+batch_size]
+                batch_tensor = torch.FloatTensor(batch_features).to(device)
+
+                # Apply projection
+                batch_projected = model(batch_tensor)
+                projected_features.append(batch_projected.cpu().numpy())
+
+                # Clean up GPU memory
+                del batch_tensor, batch_projected
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+
+            # Combine batches
+            projected_features = np.vstack(projected_features)
+            projected_features_dict[dataset_name] = projected_features
+
+            # print(f"{projected_features.shape}")
+
+    return projected_features_dict
 
 def compute_contrastive_loss(embeddings, dataset_labels, toxicity_labels,
                            margin_dataset=1.0, margin_toxicity=2.0,
@@ -708,7 +1026,6 @@ class MCDDetector:
             'threshold': self.threshold
         }
 
-
 def analyze_dataset_composition(dataset, dataset_name):
     """Analyze and report dataset composition"""
     total = len(dataset)
@@ -728,7 +1045,6 @@ def analyze_dataset_composition(dataset, dataset_name):
         print(f"  WARNING: {dataset_name} contains ONLY benign samples!")
 
     return {'total': total, 'benign': benign, 'malicious': malicious, 'multimodal': has_images}
-
 
 def prepare_ood_data_structure(datasets_dict, hidden_states_dict, labels_dict):
     in_dist_data = {}
@@ -751,7 +1067,6 @@ def prepare_ood_data_structure(datasets_dict, hidden_states_dict, labels_dict):
             ood_data[f"{dataset_name}_malicious"] = malicious_features
     
     return in_dist_data, ood_data
-
 
 def signal_handler(sig, frame):
     print('\nInterrupted by user. Exiting...')

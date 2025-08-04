@@ -33,14 +33,14 @@ class ProjectionConfig:
     PROJECTION_MODE = "layer_specific"  # Change this to switch modes
 
     # Single layer mode settings
-    SINGLE_LAYER_TRAINING_LAYER = 18  # Which layer to use for training projection
+    SINGLE_LAYER_TRAINING_LAYER = 16  # Which layer to use for training projection
 
     # Training hyperparameters
     PROJECTION_EPOCHS = 200
     PROJECTION_BATCH_SIZE = 64
     PROJECTION_LEARNING_RATE = 1e-3
     PROJECTION_LR_SCHEDULER = 'cosine'
-    PROJECTION_MAX_PATIENCE = 30
+    PROJECTION_MAX_PATIENCE = 15
 
     # Architecture settings
     INPUT_DIM = 4096
@@ -1126,7 +1126,7 @@ def main():
     signal.signal(signal.SIGINT, signal_handler)
 
     # Set random seed for reproducibility (use consistent seed)
-    MAIN_SEED = 44  # Match the seed used elsewhere in the script
+    MAIN_SEED = 47  # Match the seed used elsewhere in the script
     random.seed(MAIN_SEED)
     np.random.seed(MAIN_SEED)
     torch.manual_seed(MAIN_SEED)

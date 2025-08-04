@@ -40,7 +40,7 @@ class ProjectionConfig:
     PROJECTION_BATCH_SIZE = 64
     PROJECTION_LEARNING_RATE = 1e-3
     PROJECTION_LR_SCHEDULER = 'cosine'
-    PROJECTION_MAX_PATIENCE = 30
+    PROJECTION_MAX_PATIENCE = 15
 
     # Architecture settings
     INPUT_DIM = 4096
