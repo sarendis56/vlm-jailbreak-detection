@@ -514,7 +514,7 @@ def main():
     print(f"Training separate projection models for each layer with 5 repetitions each")
 
     # Number of repetitions for projection training
-    NUM_PROJECTION_REPETITIONS = 5
+    NUM_PROJECTION_REPETITIONS = 10
 
     # Store projection models for each layer
     layer_projection_models = {}  # {layer_idx: [projection_model_1, projection_model_2, ...]}
