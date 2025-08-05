@@ -8,6 +8,6 @@ __pycache__/
 cache/
 multi_run_results/
 results/
-*backup
+*backup*
 visualizations/
 ablation_results/

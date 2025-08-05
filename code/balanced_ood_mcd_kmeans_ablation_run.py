@@ -16,17 +16,9 @@ import numpy as np
 import random
 import warnings
 import signal
-import sys
 import os
-from scipy.linalg import inv
-from sklearn.metrics import accuracy_score, roc_curve, precision_recall_curve, auc, f1_score, confusion_matrix
 from sklearn.cluster import KMeans
 import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-import torch.nn.functional as F
-import itertools
 
 # Suppress warnings for cleaner output
 warnings.filterwarnings("ignore", message=".*copying from a non-meta parameter in the checkpoint to a meta parameter.*")
@@ -36,9 +28,8 @@ warnings.filterwarnings("ignore", message=".*Palette images with Transparency.*"
 
 # Import from the original k-means script
 from balanced_ood_mcd_kmeans import (
-    ProjectionConfig, CONFIG, GPU_DEVICE, setup_gpu_environment, cleanup_gpu_memory,
-    get_gpu_memory_info, LearnedProjection, train_learned_projection, apply_learned_projection,
-    MCDDetector, analyze_dataset_composition, prepare_balanced_training, prepare_balanced_evaluation,
+    GPU_DEVICE, cleanup_gpu_memory, train_learned_projection, apply_learned_projection,
+    MCDDetector, prepare_balanced_training, prepare_balanced_evaluation,
     prepare_ood_data_structure, signal_handler
 )
 from load_datasets import *
@@ -146,17 +137,16 @@ def prepare_kmeans_data_structure_flexible(datasets_dict, hidden_states_dict, la
     
     return in_dist_data, ood_data, metadata
 
-def evaluate_clustering_approach(detector, test_datasets, layer_hidden_states, layer_labels, approach_name):
+def evaluate_clustering_approach(detector, test_datasets, layer_hidden_states, layer_labels):
     """
     Evaluate a clustering approach on all test datasets.
-    
+
     Args:
         detector: Trained MCDDetector
         test_datasets: Dict of test dataset names to samples
         layer_hidden_states: Dict of dataset features for this layer
         layer_labels: Dict of dataset labels for this layer
-        approach_name: Name of the approach for logging
-    
+
     Returns:
         results: Dict of results for each test dataset
         combined_result: Combined result across all test datasets
@@ -170,106 +160,238 @@ def evaluate_clustering_approach(detector, test_datasets, layer_hidden_states, l
         if dataset_name in layer_hidden_states:
             test_features = layer_hidden_states[dataset_name]
             test_labels = layer_labels[dataset_name]
-            
+
             if len(test_features) > 0:
-                result = detector.evaluate(test_features, test_labels)
-                results[dataset_name] = result
-                
-                # Accumulate for combined evaluation
-                all_test_features.extend(test_features)
-                all_test_labels.extend(test_labels)
+                try:
+                    # Ensure test_labels is a proper numpy array and flatten if needed
+                    test_labels = np.array(test_labels).flatten()
+                    test_features = np.array(test_features)
+
+                    result = detector.evaluate(test_features, test_labels)
+                    results[dataset_name] = result
+
+                    # Accumulate for combined evaluation
+                    all_test_features.extend(test_features.tolist())
+                    all_test_labels.extend(test_labels.tolist())
+                except Exception as e:
+                    print(f"        Error evaluating {dataset_name}: {e}")
+                    results[dataset_name] = None
     
     # Combined evaluation across all test datasets
     if len(all_test_features) > 0:
-        combined_result = detector.evaluate(all_test_features, all_test_labels)
-        results['COMBINED'] = combined_result
+        try:
+            # Ensure all_test_labels is a proper numpy array
+            all_test_labels = np.array(all_test_labels)
+            combined_result = detector.evaluate(all_test_features, all_test_labels)
+            results['COMBINED'] = combined_result
+        except Exception as e:
+            print(f"        Error in combined evaluation: {e}")
+            results['COMBINED'] = None
     else:
         results['COMBINED'] = None
     
     return results
 
-def run_single_experiment(layer_idx, all_datasets, all_hidden_states, all_labels, 
-                         in_dist_datasets, ood_datasets, test_datasets,
-                         projection_model, approach_name, k_benign=None, k_malicious=None, 
-                         random_seed=42):
+def train_layer_projections(layer_idx, all_hidden_states, all_labels,
+                           in_dist_datasets, ood_datasets, num_repetitions=5, base_seed=42):
     """
-    Run a single experiment with specified clustering parameters.
-    
+    Train multiple learned projections for a specific layer with different random seeds.
+
+    Args:
+        layer_idx: Layer index to train projections for
+        all_hidden_states: Dict of all hidden states
+        all_labels: Dict of all labels
+        in_dist_datasets: Dict of in-distribution datasets
+        ood_datasets: Dict of OOD datasets
+        num_repetitions: Number of projection models to train
+        base_seed: Base random seed
+
     Returns:
-        results: Dict of evaluation results
+        projection_models: List of trained projection models
+    """
+    print(f"  Training {num_repetitions} projection models for layer {layer_idx}...")
+
+    # Prepare training data for projection
+    training_dataset_names = set(in_dist_datasets.keys()) | set(ood_datasets.keys())
+    projection_features_dict = {}
+    projection_labels_dict = {}
+
+    for dataset_name in training_dataset_names:
+        if dataset_name in all_hidden_states:
+            projection_features_dict[dataset_name] = all_hidden_states[dataset_name][layer_idx]
+            projection_labels_dict[dataset_name] = all_labels[dataset_name]
+
+    projection_models = []
+    for rep_idx in range(num_repetitions):
+        # Use different seed for each repetition
+        rep_seed = base_seed + layer_idx * 1000 + rep_idx * 100
+        print(f"    Training projection {rep_idx + 1}/{num_repetitions} (seed={rep_seed})...")
+
+        projection_model, _ = train_learned_projection(
+            projection_features_dict, projection_labels_dict,
+            device=GPU_DEVICE, random_seed=rep_seed
+        )
+        projection_models.append(projection_model)
+        cleanup_gpu_memory()
+
+    return projection_models
+
+def run_single_experiment_with_repetitions(layer_idx, all_datasets, all_hidden_states, all_labels,
+                                         in_dist_datasets, ood_datasets, test_datasets,
+                                         projection_models, approach_name, k_benign=None, k_malicious=None,
+                                         random_seed=42):
+    """
+    Run a single experiment with multiple projection models and average the results.
+
+    Returns:
+        averaged_results: Dict of averaged evaluation results
         metadata: Dict with experiment metadata
     """
-    print(f"    Running {approach_name} (k_benign={k_benign}, k_malicious={k_malicious})...")
-    
-    # Prepare data for this layer
-    layer_hidden_states = {}
-    layer_labels = {}
-    
-    for dataset_name in all_datasets.keys():
-        if dataset_name in all_hidden_states:
-            layer_hidden_states[dataset_name] = all_hidden_states[dataset_name][layer_idx]
-            layer_labels[dataset_name] = all_labels[dataset_name]
-    
-    # Apply learned projection
-    projected_layer_hidden_states = apply_learned_projection(
-        projection_model, layer_hidden_states, device=GPU_DEVICE
-    )
-    layer_hidden_states = projected_layer_hidden_states
-    cleanup_gpu_memory()
-    
-    # Prepare data structures based on approach
-    all_training_datasets = {**in_dist_datasets, **ood_datasets}
-    training_layer_hidden_states = {k: v for k, v in layer_hidden_states.items() if k in all_training_datasets}
-    training_layer_labels = {k: v for k, v in layer_labels.items() if k in all_training_datasets}
-    
-    if approach_name == "dataset_based":
-        # Original dataset-based approach
-        in_dist_data, ood_train_data = prepare_ood_data_structure(
-            all_training_datasets, training_layer_hidden_states, training_layer_labels
-        )
-        metadata = {'approach': 'dataset_based'}
-    else:
-        # K-means approach
-        in_dist_data, ood_train_data, clustering_metadata = prepare_kmeans_data_structure_flexible(
-            all_training_datasets, training_layer_hidden_states, training_layer_labels,
-            k_benign=k_benign, k_malicious=k_malicious, random_seed=random_seed + layer_idx
-        )
-        metadata = {'approach': 'kmeans', **clustering_metadata}
-    
-    # Initialize and train MCD detector
-    detector = MCDDetector(use_gpu=True)
-    
-    try:
-        detector.fit_in_distribution(in_dist_data)
-        detector.fit_ood_clusters(ood_train_data)
-        
-        # Use a subset of training data for threshold fitting (validation)
-        validation_features = []
-        validation_labels = []
-        for dataset_name in all_training_datasets.keys():
-            if dataset_name in layer_hidden_states:
-                features = layer_hidden_states[dataset_name]
-                labels = layer_labels[dataset_name]
-                # Use 20% of training data for validation
-                val_size = max(1, len(features) // 5)
-                validation_features.extend(features[:val_size])
-                validation_labels.extend(labels[:val_size])
-        
-        if len(validation_features) > 0:
-            detector.fit_threshold(validation_features, validation_labels)
-        
-        # Evaluate on test datasets
-        results = evaluate_clustering_approach(
-            detector, test_datasets, layer_hidden_states, layer_labels, approach_name
-        )
-        
-        cleanup_gpu_memory()
-        return results, metadata
-        
-    except Exception as e:
-        print(f"      Error in {approach_name}: {e}")
-        cleanup_gpu_memory()
+    print(f"    Running {approach_name} (k_benign={k_benign}, k_malicious={k_malicious}) with {len(projection_models)} repetitions...")
+
+    all_repetition_results = []
+
+    for rep_idx, projection_model in enumerate(projection_models):
+        try:
+            # Prepare data for this layer
+            layer_hidden_states = {}
+            layer_labels = {}
+
+            for dataset_name in all_datasets.keys():
+                if dataset_name in all_hidden_states:
+                    layer_hidden_states[dataset_name] = all_hidden_states[dataset_name][layer_idx]
+                    layer_labels[dataset_name] = all_labels[dataset_name]
+
+            # Apply learned projection
+            projected_layer_hidden_states = apply_learned_projection(
+                projection_model, layer_hidden_states, device=GPU_DEVICE
+            )
+            layer_hidden_states = projected_layer_hidden_states
+            cleanup_gpu_memory()
+
+            # Prepare data structures based on approach
+            all_training_datasets = {**in_dist_datasets, **ood_datasets}
+            training_layer_hidden_states = {k: v for k, v in layer_hidden_states.items() if k in all_training_datasets}
+            training_layer_labels = {k: v for k, v in layer_labels.items() if k in all_training_datasets}
+
+            if approach_name == "dataset_based":
+                # Original dataset-based approach
+                in_dist_data, ood_train_data = prepare_ood_data_structure(
+                    all_training_datasets, training_layer_hidden_states, training_layer_labels
+                )
+                metadata = {'approach': 'dataset_based'}
+            else:
+                # K-means approach
+                in_dist_data, ood_train_data, clustering_metadata = prepare_kmeans_data_structure_flexible(
+                    all_training_datasets, training_layer_hidden_states, training_layer_labels,
+                    k_benign=k_benign, k_malicious=k_malicious, random_seed=random_seed + layer_idx + rep_idx
+                )
+                metadata = {'approach': 'kmeans', **clustering_metadata}
+
+            # Initialize and train MCD detector
+            detector = MCDDetector(use_gpu=True)
+
+            detector.fit_in_distribution(in_dist_data)
+            detector.fit_ood_clusters(ood_train_data)
+
+            # Use a subset of training data for threshold fitting (validation)
+            validation_features = []
+            validation_labels = []
+            for dataset_name in all_training_datasets.keys():
+                if dataset_name in layer_hidden_states:
+                    features = layer_hidden_states[dataset_name]
+                    labels = layer_labels[dataset_name]
+                    # Use 20% of training data for validation
+                    val_size = max(1, len(features) // 5)
+                    validation_features.extend(features[:val_size])
+                    validation_labels.extend(labels[:val_size])
+
+            if len(validation_features) > 0:
+                detector.fit_threshold(validation_features, validation_labels)
+
+            # Evaluate on test datasets
+            results = evaluate_clustering_approach(
+                detector, test_datasets, layer_hidden_states, layer_labels
+            )
+
+            all_repetition_results.append(results)
+            cleanup_gpu_memory()
+
+        except Exception as e:
+            print(f"        Repetition {rep_idx + 1} failed: {e}")
+            cleanup_gpu_memory()
+            continue
+
+    # Average results across repetitions
+    if not all_repetition_results:
         return {}, metadata
+
+    averaged_results = average_results_across_repetitions(all_repetition_results)
+    metadata['num_repetitions'] = str(len(all_repetition_results))
+    metadata['num_successful_repetitions'] = str(len(all_repetition_results))
+
+    return averaged_results, metadata
+
+def average_results_across_repetitions(all_repetition_results):
+    """
+    Average evaluation results across multiple repetitions.
+
+    Args:
+        all_repetition_results: List of result dicts from different repetitions
+
+    Returns:
+        averaged_results: Dict with averaged metrics
+    """
+    if not all_repetition_results:
+        return {}
+
+    # Get all dataset names from the first successful result
+    dataset_names = set()
+    for results in all_repetition_results:
+        dataset_names.update(results.keys())
+
+    averaged_results = {}
+
+    for dataset_name in dataset_names:
+        # Collect all valid results for this dataset
+        dataset_results = []
+        for results in all_repetition_results:
+            if dataset_name in results and results[dataset_name] is not None:
+                dataset_results.append(results[dataset_name])
+
+        if not dataset_results:
+            averaged_results[dataset_name] = None
+            continue
+
+        # Average the metrics
+        averaged_metrics = {}
+        metric_names = dataset_results[0].keys()
+
+        for metric_name in metric_names:
+            # Skip array-like metrics (predictions, scores) - only average scalar metrics
+            if metric_name in ['predictions', 'scores']:
+                # For array metrics, just take the first one (they should be similar across repetitions)
+                averaged_metrics[metric_name] = dataset_results[0][metric_name]
+                continue
+
+            metric_values = []
+            for result in dataset_results:
+                if metric_name in result:
+                    value = result[metric_name]
+                    # Check if it's a scalar and not NaN
+                    if np.isscalar(value) and not np.isnan(value):
+                        metric_values.append(value)
+
+            if metric_values:
+                averaged_metrics[metric_name] = np.mean(metric_values)
+                averaged_metrics[f'{metric_name}_std'] = np.std(metric_values)
+            else:
+                averaged_metrics[metric_name] = np.nan
+                averaged_metrics[f'{metric_name}_std'] = np.nan
+
+        averaged_results[dataset_name] = averaged_metrics
+
+    return averaged_results
 
 def main():
     """Main function for k-means ablation study."""
@@ -387,29 +509,28 @@ def main():
     for i, approach in enumerate(clustering_approaches, 1):
         print(f"  {i}. {approach['description']}")
 
-    # Train projection models (using single layer mode for efficiency)
+    # Train projection models for each layer with repetitions
     print(f"\n--- Training Projection Models ---")
-    CONFIG.PROJECTION_MODE = "single_layer"
-    CONFIG.SINGLE_LAYER_TRAINING_LAYER = 18  # Use layer 18 for training
-    CONFIG.print_config()
+    print(f"Training separate projection models for each layer with 5 repetitions each")
 
-    # Prepare training data for projection
-    training_dataset_names = set(in_dist_datasets.keys()) | set(ood_datasets.keys())
-    projection_features_dict = {}
-    projection_labels_dict = {}
+    # Number of repetitions for projection training
+    NUM_PROJECTION_REPETITIONS = 5
 
-    for dataset_name in training_dataset_names:
-        if dataset_name in all_hidden_states:
-            projection_features_dict[dataset_name] = all_hidden_states[dataset_name][CONFIG.SINGLE_LAYER_TRAINING_LAYER]
-            projection_labels_dict[dataset_name] = all_labels[dataset_name]
+    # Store projection models for each layer
+    layer_projection_models = {}  # {layer_idx: [projection_model_1, projection_model_2, ...]}
 
-    # Train the single projection model
-    single_projection_model, dataset_name_to_id = train_learned_projection(
-        projection_features_dict, projection_labels_dict,
-        device=GPU_DEVICE, random_seed=MAIN_SEED
-    )
+    for layer_idx in test_layers:
+        print(f"\n--- Training Projections for Layer {layer_idx} ---")
+        projection_models = train_layer_projections(
+            layer_idx, all_hidden_states, all_labels,
+            in_dist_datasets, ood_datasets,
+            num_repetitions=NUM_PROJECTION_REPETITIONS,
+            base_seed=MAIN_SEED
+        )
+        layer_projection_models[layer_idx] = projection_models
+        print(f"Completed training {len(projection_models)} projection models for layer {layer_idx}")
 
-    print("Projection training completed!")
+    print("All projection training completed!")
     cleanup_gpu_memory()
 
     # Run experiments
@@ -422,16 +543,19 @@ def main():
         all_results[layer_idx] = {}
         all_metadata[layer_idx] = {}
 
+        # Get projection models for this layer
+        projection_models = layer_projection_models[layer_idx]
+
         for approach in clustering_approaches:
             approach_name = approach['name']
             k_benign = approach['k_benign']
             k_malicious = approach['k_malicious']
 
             try:
-                results, metadata = run_single_experiment(
+                results, metadata = run_single_experiment_with_repetitions(
                     layer_idx, all_datasets, all_hidden_states, all_labels,
                     in_dist_datasets, ood_datasets, test_datasets,
-                    single_projection_model, approach_name,
+                    projection_models, approach_name,
                     k_benign=k_benign, k_malicious=k_malicious,
                     random_seed=MAIN_SEED
                 )
@@ -442,8 +566,15 @@ def main():
                 # Print summary for this approach
                 if 'COMBINED' in results and results['COMBINED'] is not None:
                     combined = results['COMBINED']
-                    print(f"      {approach_name}: Acc={combined['accuracy']:.3f}, "
-                          f"F1={combined['f1']:.3f}, AUROC={combined.get('auroc', 0):.3f}")
+                    acc_mean = combined['accuracy']
+                    acc_std = combined.get('accuracy_std', 0)
+                    f1_mean = combined['f1']
+                    f1_std = combined.get('f1_std', 0)
+                    auroc_mean = combined.get('auroc', 0)
+                    auroc_std = combined.get('auroc_std', 0)
+
+                    print(f"      {approach_name}: Acc={acc_mean:.3f}±{acc_std:.3f}, "
+                          f"F1={f1_mean:.3f}±{f1_std:.3f}, AUROC={auroc_mean:.3f}±{auroc_std:.3f}")
                 else:
                     print(f"      {approach_name}: Failed")
 
@@ -460,8 +591,11 @@ def main():
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow([
-            "Layer", "Approach", "K_Benign", "K_Malicious", "Dataset",
-            "Accuracy", "F1", "TPR", "FPR", "AUROC", "AUPRC", "Threshold"
+            "Layer", "Approach", "K_Benign", "K_Malicious", "Dataset", "Num_Repetitions",
+            "Accuracy_Mean", "Accuracy_Std", "F1_Mean", "F1_Std",
+            "TPR_Mean", "TPR_Std", "FPR_Mean", "FPR_Std",
+            "AUROC_Mean", "AUROC_Std", "AUPRC_Mean", "AUPRC_Std",
+            "Threshold_Mean", "Threshold_Std"
         ])
 
         for layer_idx in test_layers:
@@ -469,33 +603,47 @@ def main():
                 metadata = all_metadata[layer_idx][approach_name]
                 k_benign = metadata.get('k_benign', 'N/A')
                 k_malicious = metadata.get('k_malicious', 'N/A')
+                num_reps = metadata.get('num_successful_repetitions', 'N/A')
 
                 if results:
                     for dataset_name, result in results.items():
                         if result is not None:
+                            def format_metric(metric_name):
+                                mean_val = result.get(metric_name, np.nan)
+                                std_val = result.get(f'{metric_name}_std', np.nan)
+                                mean_str = "N/A" if np.isnan(mean_val) else f"{mean_val:.4f}"
+                                std_str = "N/A" if np.isnan(std_val) else f"{std_val:.4f}"
+                                return mean_str, std_str
+
+                            acc_mean, acc_std = format_metric('accuracy')
+                            f1_mean, f1_std = format_metric('f1')
+                            tpr_mean, tpr_std = format_metric('tpr')
+                            fpr_mean, fpr_std = format_metric('fpr')
+                            auroc_mean, auroc_std = format_metric('auroc')
+                            auprc_mean, auprc_std = format_metric('auprc')
+                            thresh_mean, thresh_std = format_metric('threshold')
+
                             writer.writerow([
-                                layer_idx, approach_name, k_benign, k_malicious, dataset_name,
-                                f"{result['accuracy']:.4f}",
-                                f"{result['f1']:.4f}",
-                                "N/A" if np.isnan(result.get('tpr', np.nan)) else f"{result['tpr']:.4f}",
-                                "N/A" if np.isnan(result.get('fpr', np.nan)) else f"{result['fpr']:.4f}",
-                                "N/A" if np.isnan(result.get('auroc', np.nan)) else f"{result['auroc']:.4f}",
-                                "N/A" if np.isnan(result.get('auprc', np.nan)) else f"{result['auprc']:.4f}",
-                                f"{result.get('threshold', 0):.4f}"
+                                layer_idx, approach_name, k_benign, k_malicious, dataset_name, num_reps,
+                                acc_mean, acc_std, f1_mean, f1_std,
+                                tpr_mean, tpr_std, fpr_mean, fpr_std,
+                                auroc_mean, auroc_std, auprc_mean, auprc_std,
+                                thresh_mean, thresh_std
                             ])
                 else:
                     writer.writerow([
-                        layer_idx, approach_name, k_benign, k_malicious, "FAILED",
-                        "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
+                        layer_idx, approach_name, k_benign, k_malicious, "FAILED", "0",
+                        "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A", "N/A",
+                        "N/A", "N/A", "N/A", "N/A", "N/A", "N/A"
                     ])
 
     print(f"Detailed results saved to {output_path}")
 
     # Generate summary analysis
     print(f"\n--- Summary Analysis ---")
-    generate_summary_analysis(all_results, all_metadata, test_layers, clustering_approaches)
+    generate_summary_analysis(all_results, test_layers, clustering_approaches)
 
-def generate_summary_analysis(all_results, all_metadata, test_layers, clustering_approaches):
+def generate_summary_analysis(all_results, test_layers, clustering_approaches):
     """Generate and print summary analysis of the ablation study."""
 
     print("\n" + "="*100)

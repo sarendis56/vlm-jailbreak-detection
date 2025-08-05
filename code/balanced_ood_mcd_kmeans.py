@@ -548,7 +548,7 @@ def compute_optimal_shrinkage(X, sample_cov):
 
     return lambda_opt
 
-def enhanced_ledoit_wolf_covariance(X, min_samples=5):
+def enhanced_ledoit_wolf_covariance(X, min_samples=3):
     """Enhanced Ledoit-Wolf covariance estimator with minimum sample size validation"""
     n, d = X.shape
 
@@ -582,9 +582,9 @@ def enhanced_ledoit_wolf_covariance(X, min_samples=5):
 
 def ledoit_wolf_covariance(X):
     """Original Ledoit-Wolf covariance estimator"""
-    return enhanced_ledoit_wolf_covariance(X, min_samples=5)
+    return enhanced_ledoit_wolf_covariance(X, min_samples=3)
 
-def enhanced_ledoit_wolf_covariance_gpu(X, min_samples=5, device=None):
+def enhanced_ledoit_wolf_covariance_gpu(X, min_samples=3, device=None):
     """GPU-accelerated Enhanced Ledoit-Wolf covariance estimator with minimum sample size validation"""
     if device is None:
         device = GPU_DEVICE
