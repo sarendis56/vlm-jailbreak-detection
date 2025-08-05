@@ -298,7 +298,7 @@ def run_experiment(k_value, script_path, output_dir, seed=None, dry_run=False):
 
 
 def parse_results_csv(csv_path, k_value, duration, seed=None):
-    """Parse results CSV and extract key metrics"""
+    """Parse results CSV and extract layer-specific metrics"""
     try:
         with open(csv_path, 'r') as f:
             reader = csv.DictReader(f)
@@ -309,39 +309,53 @@ def parse_results_csv(csv_path, k_value, duration, seed=None):
             if seed is not None:
                 result["seed"] = seed
             return result
-        
-        # Calculate average metrics across all layers and datasets
-        accuracies = []
-        aurocs = []
-        auprcs = []
-        f1_scores = []
-        
+
+        # Group results by layer
+        layer_results = {}
+
         for row in rows:
             try:
+                layer = int(row['Layer'])
+                if layer not in layer_results:
+                    layer_results[layer] = {
+                        'accuracies': [],
+                        'aurocs': [],
+                        'auprcs': [],
+                        'f1_scores': []
+                    }
+
+                # Add metrics for this layer
                 if row['Accuracy'] != 'nan' and row['Accuracy']:
-                    accuracies.append(float(row['Accuracy']))
+                    layer_results[layer]['accuracies'].append(float(row['Accuracy']))
                 if row['AUROC'] != 'nan' and row['AUROC']:
-                    aurocs.append(float(row['AUROC']))
+                    layer_results[layer]['aurocs'].append(float(row['AUROC']))
                 if row['AUPRC'] != 'nan' and row['AUPRC']:
-                    auprcs.append(float(row['AUPRC']))
+                    layer_results[layer]['auprcs'].append(float(row['AUPRC']))
                 if row['F1'] != 'nan' and row['F1']:
-                    f1_scores.append(float(row['F1']))
+                    layer_results[layer]['f1_scores'].append(float(row['F1']))
             except (ValueError, KeyError):
                 continue
-        
+
+        # Calculate layer-wise averages
+        layer_averages = {}
+        for layer, metrics in layer_results.items():
+            layer_averages[layer] = {
+                'avg_accuracy': round(sum(metrics['accuracies']) / len(metrics['accuracies']), 4) if metrics['accuracies'] else 0,
+                'avg_auroc': round(sum(metrics['aurocs']) / len(metrics['aurocs']), 4) if metrics['aurocs'] else 0,
+                'avg_auprc': round(sum(metrics['auprcs']) / len(metrics['auprcs']), 4) if metrics['auprcs'] else 0,
+                'avg_f1': round(sum(metrics['f1_scores']) / len(metrics['f1_scores']), 4) if metrics['f1_scores'] else 0,
+                'max_accuracy': round(max(metrics['accuracies']), 4) if metrics['accuracies'] else 0,
+                'max_auroc': round(max(metrics['aurocs']), 4) if metrics['aurocs'] else 0,
+                'max_auprc': round(max(metrics['auprcs']), 4) if metrics['auprcs'] else 0,
+                'max_f1': round(max(metrics['f1_scores']), 4) if metrics['f1_scores'] else 0,
+            }
+
         result = {
             "k_value": k_value,
             "duration": round(duration, 2),
             "status": "success",
             "num_results": len(rows),
-            "avg_accuracy": round(sum(accuracies) / len(accuracies), 4) if accuracies else 0,
-            "avg_auroc": round(sum(aurocs) / len(aurocs), 4) if aurocs else 0,
-            "avg_auprc": round(sum(auprcs) / len(auprcs), 4) if auprcs else 0,
-            "avg_f1": round(sum(f1_scores) / len(f1_scores), 4) if f1_scores else 0,
-            "max_accuracy": round(max(accuracies), 4) if accuracies else 0,
-            "max_auroc": round(max(aurocs), 4) if aurocs else 0,
-            "max_auprc": round(max(auprcs), 4) if auprcs else 0,
-            "max_f1": round(max(f1_scores), 4) if f1_scores else 0
+            "layer_results": layer_averages
         }
         if seed is not None:
             result["seed"] = seed
@@ -376,52 +390,87 @@ def save_experiment_summary(results, output_dir):
     print(f"✓ Summary CSV saved to: {csv_path}")
 
 
-def aggregate_results_by_k(results):
-    """Aggregate results across multiple seeds for each k value"""
+def aggregate_results_by_k_and_layer(results):
+    """Aggregate results across multiple seeds for each k value and layer"""
     import numpy as np
 
     # Group results by k value
     k_groups = {}
     for result in results:
-        if result.get('status') != 'success':
+        if result.get('status') != 'success' or 'layer_results' not in result:
             continue
         k_value = result['k_value']
         if k_value not in k_groups:
             k_groups[k_value] = []
         k_groups[k_value].append(result)
 
-    # Aggregate metrics for each k value
+    # Aggregate metrics for each k value and layer
     aggregated = []
     for k_value, k_results in k_groups.items():
         if not k_results:
             continue
 
-        # Extract metrics from all seeds for this k value
-        metrics = ['avg_accuracy', 'avg_auroc', 'avg_auprc', 'avg_f1', 'max_accuracy', 'max_auroc', 'max_auprc', 'max_f1']
+        # Get all layers present across all seeds
+        all_layers = set()
+        for result in k_results:
+            all_layers.update(result['layer_results'].keys())
+
+        # For each layer, aggregate across seeds
+        layer_aggregated = {}
+        for layer in sorted(all_layers):
+            layer_data = {
+                'avg_accuracy': [],
+                'avg_auroc': [],
+                'avg_auprc': [],
+                'avg_f1': [],
+                'max_accuracy': [],
+                'max_auroc': [],
+                'max_auprc': [],
+                'max_f1': []
+            }
+
+            # Collect values from all seeds for this layer
+            for result in k_results:
+                if layer in result['layer_results']:
+                    layer_result = result['layer_results'][layer]
+                    for metric in layer_data.keys():
+                        if metric in layer_result:
+                            layer_data[metric].append(layer_result[metric])
+
+            # Calculate statistics for this layer
+            layer_stats = {}
+            for metric, values in layer_data.items():
+                if values:
+                    layer_stats[f'{metric}_mean'] = round(np.mean(values), 4)
+                    layer_stats[f'{metric}_std'] = round(np.std(values), 4)
+                    layer_stats[f'{metric}_min'] = round(np.min(values), 4)
+                    layer_stats[f'{metric}_max'] = round(np.max(values), 4)
+                else:
+                    layer_stats[f'{metric}_mean'] = 0
+                    layer_stats[f'{metric}_std'] = 0
+                    layer_stats[f'{metric}_min'] = 0
+                    layer_stats[f'{metric}_max'] = 0
+
+            # Calculate combined score for this layer
+            if layer_stats['avg_accuracy_mean'] > 0 and layer_stats['avg_auroc_mean'] > 0:
+                combined_score = 0.6 * layer_stats['avg_accuracy_mean'] + 0.4 * layer_stats['avg_auroc_mean']
+                layer_stats['combined_score_mean'] = round(combined_score, 4)
+
+                # Combined score std (approximate)
+                acc_std = layer_stats.get('avg_accuracy_std', 0)
+                auroc_std = layer_stats.get('avg_auroc_std', 0)
+                combined_std = np.sqrt((0.6 * acc_std)**2 + (0.4 * auroc_std)**2)
+                layer_stats['combined_score_std'] = round(combined_std, 4)
+
+            layer_aggregated[layer] = layer_stats
+
+        # Create aggregated result for this k value
         aggregated_result = {
             'k_value': k_value,
             'num_seeds': len(k_results),
-            'status': 'aggregated'
+            'status': 'aggregated',
+            'layer_results': layer_aggregated
         }
-
-        for metric in metrics:
-            values = [r.get(metric, 0) for r in k_results if metric in r]
-            if values:
-                aggregated_result[f'{metric}_mean'] = round(np.mean(values), 4)
-                aggregated_result[f'{metric}_std'] = round(np.std(values), 4)
-                aggregated_result[f'{metric}_min'] = round(np.min(values), 4)
-                aggregated_result[f'{metric}_max'] = round(np.max(values), 4)
-
-        # Calculate combined score (you can adjust the weights)
-        if 'avg_accuracy_mean' in aggregated_result and 'avg_auroc_mean' in aggregated_result:
-            combined_score = 0.6 * aggregated_result['avg_accuracy_mean'] + 0.4 * aggregated_result['avg_auroc_mean']
-            aggregated_result['combined_score_mean'] = round(combined_score, 4)
-
-            # Combined score std (approximate)
-            acc_std = aggregated_result.get('avg_accuracy_std', 0)
-            auroc_std = aggregated_result.get('avg_auroc_std', 0)
-            combined_std = np.sqrt((0.6 * acc_std)**2 + (0.4 * auroc_std)**2)
-            aggregated_result['combined_score_std'] = round(combined_std, 4)
 
         aggregated.append(aggregated_result)
 
@@ -435,59 +484,104 @@ def print_results_summary(results, aggregated_results=None):
     print(f"{'='*80}")
 
     if aggregated_results:
-        print("AGGREGATED RESULTS ACROSS MULTIPLE SEEDS:")
-        print(f"{'K Value':<8} {'Seeds':<6} {'Avg Acc (μ±σ)':<15} {'Avg AUROC (μ±σ)':<16} {'Combined (μ±σ)':<15}")
-        print("-" * 80)
+        print("AGGREGATED RESULTS ACROSS MULTIPLE SEEDS (BY LAYER):")
+        print()
 
-        # Sort by combined score mean
-        aggregated_results.sort(key=lambda x: x.get('combined_score_mean', 0), reverse=True)
+        # Find best overall k value first
+        best_k = None
+        best_combined_score = 0
 
         for result in aggregated_results:
-            acc_mean = result.get('avg_accuracy_mean', 0)
-            acc_std = result.get('avg_accuracy_std', 0)
-            auroc_mean = result.get('avg_auroc_mean', 0)
-            auroc_std = result.get('avg_auroc_std', 0)
-            combined_mean = result.get('combined_score_mean', 0)
-            combined_std = result.get('combined_score_std', 0)
+            k_value = result['k_value']
+            layer_results = result['layer_results']
 
-            print(f"{result['k_value']:<8} "
-                  f"{result['num_seeds']:<6} "
-                  f"{acc_mean:.3f}±{acc_std:.3f}    "
-                  f"{auroc_mean:.3f}±{auroc_std:.3f}     "
-                  f"{combined_mean:.3f}±{combined_std:.3f}")
+            # Calculate average combined score across all layers for this k
+            combined_scores = []
+            for layer, layer_data in layer_results.items():
+                if 'combined_score_mean' in layer_data:
+                    combined_scores.append(layer_data['combined_score_mean'])
+
+            if combined_scores:
+                avg_combined = sum(combined_scores) / len(combined_scores)
+                if avg_combined > best_combined_score:
+                    best_combined_score = avg_combined
+                    best_k = k_value
+
+        # Print results for each k value
+        for result in sorted(aggregated_results, key=lambda x: x['k_value']):
+            k_value = result['k_value']
+            num_seeds = result['num_seeds']
+            layer_results = result['layer_results']
+
+            print(f"K = {k_value} (across {num_seeds} seeds):")
+            print(f"{'Layer':<6} {'Accuracy (μ±σ)':<15} {'AUROC (μ±σ)':<15} {'AUPRC (μ±σ)':<15} {'Combined (μ±σ)':<15}")
+            print("-" * 75)
+
+            # Sort layers numerically
+            for layer in sorted(layer_results.keys()):
+                layer_data = layer_results[layer]
+
+                acc_mean = layer_data.get('avg_accuracy_mean', 0)
+                acc_std = layer_data.get('avg_accuracy_std', 0)
+                auroc_mean = layer_data.get('avg_auroc_mean', 0)
+                auroc_std = layer_data.get('avg_auroc_std', 0)
+                auprc_mean = layer_data.get('avg_auprc_mean', 0)
+                auprc_std = layer_data.get('avg_auprc_std', 0)
+                combined_mean = layer_data.get('combined_score_mean', 0)
+                combined_std = layer_data.get('combined_score_std', 0)
+
+                print(f"{layer:<6} "
+                      f"{acc_mean:.3f}±{acc_std:.3f}     "
+                      f"{auroc_mean:.3f}±{auroc_std:.3f}     "
+                      f"{auprc_mean:.3f}±{auprc_std:.3f}     "
+                      f"{combined_mean:.3f}±{combined_std:.3f}")
+
+            print()  # Empty line between k values
 
         # Highlight best performing k value
-        if aggregated_results:
-            best_result = aggregated_results[0]
-            print(f"\n🏆 Best performing k value: {best_result['k_value']} "
-                  f"(Combined Score: {best_result.get('combined_score_mean', 0):.4f}±{best_result.get('combined_score_std', 0):.4f})")
+        if best_k is not None:
+            print(f"🏆 Best performing k value overall: {best_k} "
+                  f"(Average Combined Score: {best_combined_score:.4f})")
     else:
-        # Original single-seed summary
+        # Individual seed results
         successful_results = [r for r in results if r.get('status') == 'success']
 
         if not successful_results:
             print("No successful experiments to summarize.")
             return
 
-        # Sort by average accuracy (or another metric)
-        successful_results.sort(key=lambda x: x.get('avg_accuracy', 0), reverse=True)
+        print("INDIVIDUAL SEED RESULTS:")
+        print()
 
-        print(f"{'K Value':<8} {'Avg Acc':<8} {'Max Acc':<8} {'Avg AUROC':<10} {'Max AUROC':<10} {'Duration':<10}")
-        print("-" * 70)
-
+        # Group by k value for better organization
+        k_groups = {}
         for result in successful_results:
-            seed_info = f" (seed {result['seed']})" if 'seed' in result else ""
-            print(f"{result['k_value']:<8} "
-                  f"{result.get('avg_accuracy', 0):.4f}   "
-                  f"{result.get('max_accuracy', 0):.4f}   "
-                  f"{result.get('avg_auroc', 0):.4f}     "
-                  f"{result.get('max_auroc', 0):.4f}     "
-                  f"{result.get('duration', 0):.1f}s{seed_info}")
+            k_value = result['k_value']
+            if k_value not in k_groups:
+                k_groups[k_value] = []
+            k_groups[k_value].append(result)
 
-        # Highlight best performing k value
-        best_result = successful_results[0]
-        print(f"\n🏆 Best performing k value: {best_result['k_value']} "
-              f"(Avg Accuracy: {best_result.get('avg_accuracy', 0):.4f})")
+        for k_value in sorted(k_groups.keys()):
+            k_results = k_groups[k_value]
+            print(f"K = {k_value}:")
+
+            for result in k_results:
+                seed_info = f" (seed {result['seed']})" if 'seed' in result else ""
+                print(f"  {seed_info}")
+
+                if 'layer_results' in result:
+                    print(f"    {'Layer':<6} {'Accuracy':<10} {'AUROC':<10} {'AUPRC':<10}")
+                    print("    " + "-" * 40)
+
+                    for layer in sorted(result['layer_results'].keys()):
+                        layer_data = result['layer_results'][layer]
+                        acc = layer_data.get('avg_accuracy', 0)
+                        auroc = layer_data.get('avg_auroc', 0)
+                        auprc = layer_data.get('avg_auprc', 0)
+
+                        print(f"    {layer:<6} {acc:<10.4f} {auroc:<10.4f} {auprc:<10.4f}")
+
+                print()  # Empty line between seeds
 
 
 def main():
@@ -568,7 +662,7 @@ def main():
         # Aggregate results by k value if multiple seeds
         aggregated_results = None
         if len(seeds) > 1:
-            aggregated_results = aggregate_results_by_k(all_results)
+            aggregated_results = aggregate_results_by_k_and_layer(all_results)
 
             # Save aggregated results
             aggregated_json_path = os.path.join(args.output_dir, "aggregated_results.json")
@@ -576,18 +670,31 @@ def main():
                 json.dump(aggregated_results, f, indent=2)
             print(f"✓ Aggregated results saved to: {aggregated_json_path}")
 
-            # Save aggregated CSV
-            aggregated_csv_path = os.path.join(args.output_dir, "aggregated_k_comparison.csv")
+            # Save aggregated CSV (layer-specific)
+            aggregated_csv_path = os.path.join(args.output_dir, "aggregated_k_layer_comparison.csv")
             with open(aggregated_csv_path, 'w', newline='') as f:
                 if aggregated_results:
-                    all_fieldnames = set()
+                    # Create flattened rows for CSV
+                    csv_rows = []
                     for result in aggregated_results:
-                        all_fieldnames.update(result.keys())
+                        k_value = result['k_value']
+                        num_seeds = result['num_seeds']
 
-                    writer = csv.DictWriter(f, fieldnames=sorted(all_fieldnames))
-                    writer.writeheader()
-                    writer.writerows(aggregated_results)
-            print(f"✓ Aggregated CSV saved to: {aggregated_csv_path}")
+                        for layer, layer_data in result['layer_results'].items():
+                            row = {
+                                'k_value': k_value,
+                                'layer': layer,
+                                'num_seeds': num_seeds,
+                                **layer_data  # Flatten all layer metrics
+                            }
+                            csv_rows.append(row)
+
+                    if csv_rows:
+                        fieldnames = csv_rows[0].keys()
+                        writer = csv.DictWriter(f, fieldnames=fieldnames)
+                        writer.writeheader()
+                        writer.writerows(csv_rows)
+            print(f"✓ Aggregated layer-specific CSV saved to: {aggregated_csv_path}")
 
         # Print summary
         print_results_summary(all_results, aggregated_results)
