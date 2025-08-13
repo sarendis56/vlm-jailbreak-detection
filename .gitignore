@@ -12,3 +12,4 @@ results/
 visualizations/
 ablation_results/
 analysis/figures/
+test*

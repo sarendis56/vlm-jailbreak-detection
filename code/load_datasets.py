@@ -1,4 +1,4 @@
-import torch.nn.functional as N
+import torch.nn.functional as F
 import pandas as pd
 import csv
 import numpy as np
@@ -10,16 +10,26 @@ import warnings
 # Suppress the specific PyTorch warning about meta parameters
 warnings.filterwarnings("ignore", message=".*copying from a non-meta parameter in the checkpoint to a meta parameter.*")
 
+# Global seed for reproducible dataset sampling
+DATASET_RANDOM_SEED = 42
+
 # Set random seed for reproducible dataset sampling
 # This ensures consistent results across runs when using random.sample()
-random.seed(42)
-np.random.seed(42)
+random.seed(DATASET_RANDOM_SEED)
+np.random.seed(DATASET_RANDOM_SEED)
 
 def set_dataset_random_seed(seed=42):
     """Set random seed for reproducible dataset sampling"""
+    global DATASET_RANDOM_SEED
+    DATASET_RANDOM_SEED = seed
     random.seed(seed)
     np.random.seed(seed)
     print(f"Dataset random seed set to {seed}")
+
+def ensure_deterministic_sampling():
+    """Ensure deterministic sampling by resetting seed before random operations"""
+    random.seed(DATASET_RANDOM_SEED)
+    np.random.seed(DATASET_RANDOM_SEED)
 
 def load_XSTest(file_path = 'data/XSTest/data/gpt4-00000-of-00001.parquet'):
     if file_path.endswith('.parquet'):
@@ -276,8 +286,10 @@ def load_JailBreakV_query_related(image_styles=None, max_samples=None):
     Load JailBreakV-28K dataset using query_related images
 
     Args:
-        image_styles: List of styles to include ['SD', 'typo'] or None for all
+        image_styles: List of styles to include ['SD', 'typo'] or None for default (SD only)
         max_samples: Maximum number of samples to return
+
+    Note: Defaults to SD style only to prevent dataset leakage with typo style
     """
     return _load_JailBreakV_subset(attack_types=["query_related"],
                                    image_styles=image_styles, max_samples=max_samples)
@@ -328,10 +340,11 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
         attack_types = ["figstep", "llm_transfer_attack", "query_related"]
 
     # Define available styles for each attack type (based on filename prefixes)
+    # Note: query_related defaults to only "SD" to prevent dataset leakage with figstep testing
     available_styles = {
         "figstep": ["figstep"],  # figstep images have no prefix
-        "llm_transfer_attack": ["nature", "noise", "SD", "blank"],  # SD not SD_related
-        "query_related": ["SD", "typo"]  # Only SD and typo prefixes exist
+        "llm_transfer_attack": ["nature", "noise", "SD", "blank"],
+        "query_related": ["SD"]  # Default to SD only to prevent leakage with typo style
     }
 
     try:
@@ -414,6 +427,8 @@ def _load_JailBreakV_subset(attack_types=None, image_styles=None, max_samples=No
 
         # Apply sample limit if specified
         if max_samples is not None and len(unsafe_set) > max_samples:
+            # Ensure deterministic sampling by resetting seed
+            ensure_deterministic_sampling()
             unsafe_set = random.sample(unsafe_set, max_samples)
             print(f"Sampled {max_samples} from {len(collected_images)} available samples")
 
@@ -436,10 +451,11 @@ def list_JailBreakV_available_styles():
     base_path = "data/JailBreakV-28K"
 
     # Define available styles based on filename prefixes
+    # Note: This shows ALL available styles, but query_related defaults to SD only
     available_styles = {
         "figstep": ["figstep"],
         "llm_transfer_attack": ["nature", "noise", "SD", "blank"],
-        "query_related": ["SD", "typo"]
+        "query_related": ["SD", "typo"]  # All available, but default is SD only
     }
 
     print("JailBreakV-28K Available Attack Types and Image Styles:")
