@@ -162,7 +162,7 @@ def test(dataset, model_path, s=21, e=24, use_cache=True, dataset_name="hidden_d
                     F.append(cached_hidden_states[layer_idx][sample_idx])
 
             if F:
-                aware_auc = np.trapz(np.array(F))
+                aware_auc = np.trapezoid(np.array(F))
             else:
                 aware_auc = None
             aware_auc_all.append(aware_auc)
@@ -176,10 +176,9 @@ def test(dataset, model_path, s=21, e=24, use_cache=True, dataset_name="hidden_d
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
 
-    # Load with device_map="auto" to use both GPUs like the working hidden_detect.py
     model = Qwen2_5_VLForConditionalGeneration.from_pretrained(
         model_path,
-        device_map="auto",
+        device_map="cuda:1",
         torch_dtype=torch.float16
     )
 
@@ -321,7 +320,7 @@ def test(dataset, model_path, s=21, e=24, use_cache=True, dataset_name="hidden_d
         # Slice F to get only the layers we want (like the working version does)
         F = F[s:e+1]
         if F:
-            aware_auc = np.trapz(np.array(F))
+            aware_auc = np.trapezoid(np.array(F))
         else:
             aware_auc = None
 
@@ -355,8 +354,9 @@ def test(dataset, model_path, s=21, e=24, use_cache=True, dataset_name="hidden_d
     return label_all, aware_auc_all
 
 def evaluate_AUPRC(true_labels, scores):
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(true_labels, scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(true_labels, scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for AUPRC calculation")
         return 0.0
@@ -366,13 +366,29 @@ def evaluate_AUPRC(true_labels, scores):
         print("Warning: Only one class present in labels")
         return 0.0
 
+    # Convert to numpy arrays and ensure no NaN/inf values
+    valid_labels = np.array(valid_labels)
+    valid_scores = np.array(valid_scores)
+
+    # Double-check for any remaining NaN/inf values
+    if np.any(np.isnan(valid_scores)) or np.any(np.isinf(valid_scores)):
+        print("Warning: NaN or inf values detected in scores, filtering them out")
+        finite_mask = np.isfinite(valid_scores)
+        valid_labels = valid_labels[finite_mask]
+        valid_scores = valid_scores[finite_mask]
+
+    if len(valid_scores) == 0:
+        print("Warning: No finite scores available for AUPRC calculation")
+        return 0.0
+
     precision_arr, recall_arr, _ = precision_recall_curve(valid_labels, valid_scores)
     auprc = auc(recall_arr, precision_arr)
     return auprc
 
 def evaluate_AUROC(true_labels, scores):
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(true_labels, scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(true_labels, scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for AUROC calculation")
         return 0.0
@@ -382,14 +398,30 @@ def evaluate_AUROC(true_labels, scores):
         print("Warning: Only one class present in labels")
         return 0.0
 
+    # Convert to numpy arrays and ensure no NaN/inf values
+    valid_labels = np.array(valid_labels)
+    valid_scores = np.array(valid_scores)
+
+    # Double-check for any remaining NaN/inf values
+    if np.any(np.isnan(valid_scores)) or np.any(np.isinf(valid_scores)):
+        print("Warning: NaN or inf values detected in scores, filtering them out")
+        finite_mask = np.isfinite(valid_scores)
+        valid_labels = valid_labels[finite_mask]
+        valid_scores = valid_scores[finite_mask]
+
+    if len(valid_scores) == 0:
+        print("Warning: No finite scores available for AUROC calculation")
+        return 0.0
+
     fpr, tpr, _ = roc_curve(valid_labels, valid_scores)
     auroc = auc(fpr, tpr)
     return auroc
 
 def find_optimal_threshold(train_labels, train_scores):
     """Find optimal threshold using training set"""
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(train_labels, train_scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(train_labels, train_scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for threshold optimization")
         return 0.0
@@ -397,6 +429,21 @@ def find_optimal_threshold(train_labels, train_scores):
     valid_labels, valid_scores = zip(*valid_pairs)
     if len(set(valid_labels)) < 2:
         print("Warning: Only one class present in training labels")
+        return 0.0
+
+    # Convert to numpy arrays and ensure no NaN/inf values
+    valid_labels = np.array(valid_labels)
+    valid_scores = np.array(valid_scores)
+
+    # Double-check for any remaining NaN/inf values
+    if np.any(np.isnan(valid_scores)) or np.any(np.isinf(valid_scores)):
+        print("Warning: NaN or inf values detected in scores, filtering them out")
+        finite_mask = np.isfinite(valid_scores)
+        valid_labels = valid_labels[finite_mask]
+        valid_scores = valid_scores[finite_mask]
+
+    if len(valid_scores) == 0:
+        print("Warning: No finite scores available for threshold optimization")
         return 0.0
 
     # Use precision-recall curve to find optimal threshold
@@ -415,8 +462,9 @@ def find_optimal_threshold(train_labels, train_scores):
 
 def evaluate_with_threshold(true_labels, scores, threshold):
     """Evaluate accuracy using the given threshold"""
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(true_labels, scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(true_labels, scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for accuracy calculation")
         return 0.0
@@ -428,8 +476,9 @@ def evaluate_with_threshold(true_labels, scores, threshold):
 
 def evaluate_F1(true_labels, scores, threshold):
     """Evaluate F1 score using the given threshold"""
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(true_labels, scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(true_labels, scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for F1 calculation")
         return 0.0
@@ -441,8 +490,9 @@ def evaluate_F1(true_labels, scores, threshold):
 
 def evaluate_FPR_TPR(true_labels, scores, threshold):
     """Evaluate False Positive Rate (FPR) and True Positive Rate (TPR) using the given threshold"""
-    # Filter out None values
-    valid_pairs = [(label, score) for label, score in zip(true_labels, scores) if score is not None]
+    # Filter out None values and NaN values
+    valid_pairs = [(label, score) for label, score in zip(true_labels, scores)
+                   if score is not None and not np.isnan(score) and np.isfinite(score)]
     if len(valid_pairs) == 0:
         print("Warning: No valid samples for FPR/TPR calculation")
         return 0.0, 0.0
@@ -686,7 +736,7 @@ def check_dependencies():
     return True
 
 if __name__ == "__main__":
-    model_path = "./model/Qwen2.5-VL-7B-Instruct"
+    model_path = "./model/Qwen2.5-VL-3B-Instruct"
 
     print("="*80)
     print("UNSUPERVISED JAILBREAK DETECTION WITH BALANCED DATASETS (QWEN)")

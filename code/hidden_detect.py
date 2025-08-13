@@ -112,7 +112,7 @@ def test(dataset, model_path, s=16, e=31, use_cache=True, dataset_name="hidden_d
                     F.append(cached_hidden_states[layer_idx][sample_idx])
 
             if F:
-                aware_auc = np.trapz(np.array(F))
+                aware_auc = np.trapezoid(np.array(F))
             else:
                 aware_auc = None
             aware_auc_all.append(aware_auc)
@@ -324,7 +324,7 @@ def test(dataset, model_path, s=16, e=31, use_cache=True, dataset_name="hidden_d
 
             F = F[s:e+1]
             if F:
-                aware_auc = np.trapz(np.array(F))
+                aware_auc = np.trapezoid(np.array(F))
             else:
                 aware_auc = None
 
