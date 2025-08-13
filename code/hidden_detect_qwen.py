@@ -505,9 +505,32 @@ def create_balanced_datasets():
         print(f"Could not load AdvBench: {e}")
 
     try:
-        jbv_samples = load_JailBreakV_llm_transfer_attack(image_styles=['nature'], max_samples=550)
+        # JailbreakV-28K - 550 samples (using llm_transfer_attack and query_related for training)
+        print("  Loading JailbreakV-28K with controlled attack type distribution...")
+
+        # Load llm_transfer_attack samples (275 samples)
+        llm_attack_samples = load_JailBreakV_custom(
+            attack_types=["llm_transfer_attack"],
+            max_samples=275
+        )
+
+        # Load query_related samples (275 samples)
+        query_related_samples = load_JailBreakV_custom(
+            attack_types=["query_related"],
+            max_samples=275
+        )
+
+        # Combine both attack types
+        jbv_samples = []
+        if llm_attack_samples:
+            jbv_samples.extend(llm_attack_samples)
+            print(f"    Loaded {len(llm_attack_samples)} llm_transfer_attack samples")
+        if query_related_samples:
+            jbv_samples.extend(query_related_samples)
+            print(f"    Loaded {len(query_related_samples)} query_related samples")
+
         train_malicious.extend(jbv_samples)
-        print(f"Added {len(jbv_samples)} JailbreakV-28K samples (llm_transfer_attack/nature for training)")
+        print(f"Added {len(jbv_samples)} JailbreakV-28K samples ({len(llm_attack_samples)} llm_transfer + {len(query_related_samples)} query_related for training)")
     except Exception as e:
         print(f"Could not load JailbreakV-28K: {e}")
 
@@ -596,9 +619,10 @@ def create_balanced_datasets():
         print(f"Could not load VAE: {e}")
 
     try:
-        jbv_test_samples = load_JailBreakV_llm_transfer_attack(image_styles=['SD'], max_samples=150)
+        # JailbreakV-28K - 150 samples (figstep attack for testing)
+        jbv_test_samples = load_JailBreakV_figstep(max_samples=150)
         test_unsafe.extend(jbv_test_samples)
-        print(f"Added {len(jbv_test_samples)} JailbreakV-28K samples (llm_transfer_attack/SD for testing)")
+        print(f"Added {len(jbv_test_samples)} JailbreakV-28K samples (figstep attack for testing)")
     except Exception as e:
         print(f"Could not load JailbreakV-28K for testing: {e}")
 
