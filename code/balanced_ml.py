@@ -1030,6 +1030,11 @@ def main():
     # Initialize model-specific feature extractor
     extractor = get_model_specific_extractor(model_path, model_type)
 
+    # Get the layer range for this model
+    layer_start, layer_end = extractor.get_default_layer_range()
+    num_layers = layer_end - layer_start + 1
+    print(f"Model layer range: {layer_start}-{layer_end} ({num_layers} layers)")
+
     # Extract hidden states for all datasets individually (with dataset-specific caching)
     print("\n--- Extracting Hidden States with Dataset-Specific Caching ---")
     all_datasets = {**training_datasets, **test_datasets}
@@ -1045,7 +1050,7 @@ def main():
             memory_cleanup_freq = 5 if len(samples) > 5000 else 10
 
             hidden_states, labels, _ = extractor.extract_hidden_states(
-                samples, f"{dataset_name}", layer_start=0, layer_end=31, use_cache=True,
+                samples, f"{dataset_name}", use_cache=True,
                 batch_size=batch_size, memory_cleanup_freq=memory_cleanup_freq,
                 experiment_name="balanced_ml_detection"
             )
@@ -1061,8 +1066,8 @@ def main():
     train_labels = []
     test_labels = []
 
-    # Initialize layer dictionaries
-    for layer_idx in range(32):
+    # Initialize layer dictionaries using dynamic layer range
+    for layer_idx in range(layer_start, layer_end + 1):
         train_hidden_states_dict[layer_idx] = []
         test_hidden_states_dict[layer_idx] = []
 
@@ -1073,7 +1078,7 @@ def main():
             dataset_labels = all_labels[dataset_name]
             train_labels.extend(dataset_labels)
 
-            for layer_idx in range(32):
+            for layer_idx in range(layer_start, layer_end + 1):
                 layer_features = all_hidden_states[dataset_name][layer_idx]
                 train_hidden_states_dict[layer_idx].extend(layer_features)
 
@@ -1084,12 +1089,12 @@ def main():
             dataset_labels = all_labels[dataset_name]
             test_labels.extend(dataset_labels)
 
-            for layer_idx in range(32):
+            for layer_idx in range(layer_start, layer_end + 1):
                 layer_features = all_hidden_states[dataset_name][layer_idx]
                 test_hidden_states_dict[layer_idx].extend(layer_features)
 
     # Convert to numpy arrays
-    for layer_idx in range(32):
+    for layer_idx in range(layer_start, layer_end + 1):
         train_hidden_states_dict[layer_idx] = np.array(train_hidden_states_dict[layer_idx])
         test_hidden_states_dict[layer_idx] = np.array(test_hidden_states_dict[layer_idx])
 
@@ -1101,7 +1106,7 @@ def main():
     
     # Train and evaluate models for each layer and model type
     results = {}
-    layers = list(range(0, 32))  # layers 0-31
+    layers = list(range(layer_start, layer_end + 1))  # Use dynamic layer range
     model_types = ['mlp', 'logistic', 'ridge', 'svm', 'sgd']
 
     print("\n--- Training and Evaluating Models ---")

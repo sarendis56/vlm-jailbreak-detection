@@ -51,23 +51,35 @@ class HiddenStateExtractor:
         if self.model is None:
             self._load_model()
 
+        print(f"Debug: Inspecting model structure for layer detection...")
+        print(f"Debug: Model type: {type(self.model)}")
+        print(f"Debug: Model path: {self.model_path}")
+
         # For Qwen2.5-VL models, get the number of layers from the language model
         if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
             num_layers = len(self.model.model.layers)
+            print(f"Debug: Found layers via model.model.layers: {num_layers}")
         elif hasattr(self.model, 'language_model') and hasattr(self.model.language_model, 'model') and hasattr(self.model.language_model.model, 'layers'):
             num_layers = len(self.model.language_model.model.layers)
+            print(f"Debug: Found layers via language_model.model.layers: {num_layers}")
         else:
+            print(f"Debug: Could not find layers in model structure, checking config...")
             # Fallback: try to get from config
             if hasattr(self.model.config, 'num_hidden_layers'):
                 num_layers = self.model.config.num_hidden_layers
+                print(f"Debug: Found layers from config.num_hidden_layers: {num_layers}")
             else:
+                print(f"Debug: No num_hidden_layers in config, using model path fallback...")
                 # Default fallback based on model name
                 if '3B' in self.model_path or '3b' in self.model_path:
                     num_layers = 36
+                    print(f"Debug: Using 3B fallback: {num_layers}")
                 elif '7B' in self.model_path or '7b' in self.model_path:
                     num_layers = 28
+                    print(f"Debug: Using 7B fallback: {num_layers}")
                 else:
-                    num_layers = 32 
+                    num_layers = 32
+                    print(f"Debug: Using default fallback: {num_layers}")
 
         print(f"Detected {num_layers} layers in model")
         return num_layers
@@ -207,8 +219,8 @@ class HiddenStateExtractor:
                 # Periodic memory cleanup and monitoring
                 if sample_idx % memory_cleanup_freq == 0:
                     self._aggressive_cleanup()
-                    if sample_idx % 20 == 0:  # Print memory info every 20 samples
-                        self._print_memory_info(f"Sample {sample_idx}: ")
+                    # if sample_idx % 20 == 0:  # Print memory info every 20 samples
+                    #     self._print_memory_info(f"Sample {sample_idx}: ")
 
                 # Prepare messages for Qwen2.5-VL
                 messages = self._prepare_qwen_messages(sample)

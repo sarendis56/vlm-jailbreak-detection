@@ -1201,6 +1201,11 @@ def main():
     # Initialize model-specific feature extractor
     extractor = get_model_specific_extractor(model_path, model_type)
 
+    # Get the layer range for this model
+    layer_start, layer_end = extractor.get_default_layer_range()
+    num_layers = layer_end - layer_start + 1
+    print(f"Model layer range: {layer_start}-{layer_end} ({num_layers} layers)")
+
     print("="*80)
     print(f"BALANCED OOD-BASED JAILBREAK DETECTION USING KCD WITH LAYER-SPECIFIC PROJECTIONS ({model_type.upper()})")
     print("="*80)
@@ -1266,14 +1271,14 @@ def main():
         memory_cleanup_freq = 5 if len(samples) > 5000 else 10
 
         hidden_states, labels, _ = extractor.extract_hidden_states(
-            samples, f"{dataset_name}", layer_start=0, layer_end=31, use_cache=True,
+            samples, f"{dataset_name}", use_cache=True,
             batch_size=batch_size, memory_cleanup_freq=memory_cleanup_freq,
             experiment_name="balanced_ml_detection"
         )
         all_hidden_states[dataset_name] = hidden_states
         all_labels[dataset_name] = labels
 
-    layers = list(range(0, 32))  # layers 0-31
+    layers = list(range(layer_start, layer_end + 1))  # Use dynamic layer range
     layer_results = {}
 
     # === TRAIN LEARNED PROJECTIONS ===
