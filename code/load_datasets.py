@@ -83,7 +83,14 @@ def load_mm_vet(json_path = "data/MM-Vet/mm-vet.json"):
                 if isinstance(item, dict):
                     # Extract question text and image path
                     question = item.get('question', item.get('text', ''))
-                    image_path = item.get('image', item.get('image_path', None))
+
+                    # Handle MM-Vet specific image naming convention
+                    image_name = item.get('imagename', item.get('image', item.get('image_path', None)))
+                    if image_name and not image_name.startswith(('http://', 'https://', '/')):
+                        # Construct full path to MM-Vet images directory
+                        image_path = f"data/MM-Vet/images/{image_name}"
+                    else:
+                        image_path = image_name
 
                     sample = {
                         "txt": question,
@@ -106,9 +113,17 @@ def load_mm_vet(json_path = "data/MM-Vet/mm-vet.json"):
             for i, item in enumerate(raw_data):
                 if isinstance(item, dict):
                     # Ensure proper format
+                    # Handle MM-Vet specific image naming convention
+                    image_name = item.get('imagename', item.get('image', item.get('image_path', item.get('img', None))))
+                    if image_name and not image_name.startswith(('http://', 'https://', '/')):
+                        # Construct full path to MM-Vet images directory
+                        image_path = f"data/MM-Vet/images/{image_name}"
+                    else:
+                        image_path = image_name
+
                     sample = {
                         "txt": item.get('question', item.get('text', item.get('txt', ''))),
-                        "img": item.get('image', item.get('image_path', item.get('img', None))),
+                        "img": image_path,
                         "toxicity": item.get('toxicity', 0),
                         "question_id": item.get('question_id', f"mmvet_{i}")
                     }
