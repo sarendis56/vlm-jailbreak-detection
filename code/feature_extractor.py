@@ -83,10 +83,10 @@ class HiddenStateExtractor:
         """Load model only when needed"""
         if self.model is None:
             print(f"Loading model from {self.model_path}...")
-            self.model_name = get_model_name_from_path(self.model_path)        
+            self.model_name = get_model_name_from_path(self.model_path)
             kwargs = {
                 "device_map": "auto",
-                "torch_dtype": torch.float16    
+                "torch_dtype": torch.float16
             }
             self.tokenizer, self.model, self.image_processor, self.context_len = load_pretrained_model(
                 model_path=self.model_path,
@@ -94,6 +94,37 @@ class HiddenStateExtractor:
                 model_name=self.model_name,
                 **kwargs
             )
+
+    def _get_model_layers(self):
+        """Get the number of layers in the LLaVA model"""
+        if self.model is None:
+            self._load_model()
+
+        # For LLaVA models, get the number of layers from the language model
+        if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
+            num_layers = len(self.model.model.layers)
+        elif hasattr(self.model, 'language_model') and hasattr(self.model.language_model, 'model') and hasattr(self.model.language_model.model, 'layers'):
+            num_layers = len(self.model.language_model.model.layers)
+        else:
+            # Fallback: try to get from config
+            if hasattr(self.model.config, 'num_hidden_layers'):
+                num_layers = self.model.config.num_hidden_layers
+            else:
+                # Default fallback based on model name
+                if '7b' in self.model_name.lower() or '7B' in self.model_name:
+                    num_layers = 32  # LLaVA-7B typically has 32 layers
+                elif '13b' in self.model_name.lower() or '13B' in self.model_name:
+                    num_layers = 40  # LLaVA-13B typically has 40 layers
+                else:
+                    num_layers = 32  # Conservative default
+
+        print(f"Detected {num_layers} layers in LLaVA model")
+        return num_layers
+
+    def get_default_layer_range(self):
+        """Get the default layer range for this model (all layers)"""
+        num_layers = self._get_model_layers()
+        return 0, num_layers - 1  # 0-indexed, so last layer is num_layers - 1
     
     def _find_conv_mode(self, model_name):
         if "llama-2" in model_name.lower():
@@ -206,7 +237,7 @@ class HiddenStateExtractor:
             print(f"Error preparing image tensors: {e}")
             return None, None
 
-    def extract_hidden_states(self, dataset, dataset_name, layer_start=16, layer_end=32,
+    def extract_hidden_states(self, dataset, dataset_name, layer_start=None, layer_end=None,
                             use_cache=True, label_key='toxicity', batch_size=10, memory_cleanup_freq=5, experiment_name=None):
         """
         Extract hidden states with improved memory management for large datasets
@@ -221,6 +252,15 @@ class HiddenStateExtractor:
             memory_cleanup_freq: Clean GPU memory every N samples
             experiment_name: Optional experiment name for cache organization
         """
+        # Set default layer ranges if not provided
+        if layer_start is None or layer_end is None:
+            default_start, default_end = self.get_default_layer_range()
+            if layer_start is None:
+                layer_start = default_start
+            if layer_end is None:
+                layer_end = default_end
+            print(f"Using automatic layer range: {layer_start}-{layer_end}")
+
         layer_range = (layer_start, layer_end)
         dataset_size = len(dataset)
 
