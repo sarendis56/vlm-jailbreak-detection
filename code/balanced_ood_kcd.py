@@ -19,7 +19,52 @@ warnings.filterwarnings("ignore", message=".*TypedStorage is deprecated.*")
 warnings.filterwarnings("ignore", message=".*Palette images with Transparency.*")
 
 from load_datasets import *
-from feature_extractor import HiddenStateExtractor
+
+# Smart import handling based on command line arguments and available dependencies
+import sys
+
+def detect_model_from_args():
+    """Detect model type from command line arguments"""
+    if len(sys.argv) > 1:
+        model_arg = sys.argv[1].lower()
+        if model_arg == 'qwen':
+            return 'qwen'
+        elif model_arg == 'llava':
+            return 'llava'
+    return 'llava'  # Default
+
+# Determine which model we're using
+REQUESTED_MODEL = detect_model_from_args()
+
+# Import appropriate dependencies based on requested model
+if REQUESTED_MODEL == 'qwen':
+    try:
+        from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+        from qwen_vl_utils import process_vision_info
+        from feature_extractor_qwen import HiddenStateExtractor
+        QWEN_AVAILABLE = True
+        LLAVA_AVAILABLE = False
+        print("Using Qwen model configuration")
+    except ImportError as e:
+        print(f"Error: Qwen dependencies not available: {e}")
+        print("Please install: pip install qwen-vl-utils transformers>=4.37.0")
+        sys.exit(1)
+else:
+    try:
+        from feature_extractor import HiddenStateExtractor
+        LLAVA_AVAILABLE = True
+        QWEN_AVAILABLE = False
+        print("Using LLaVA model configuration")
+    except ImportError as e:
+        print(f"Error: LLaVA dependencies not available: {e}")
+        print("Please install LLaVA dependencies")
+        sys.exit(1)
+
+def get_model_specific_extractor(model_path, model_type):
+    """Get the appropriate feature extractor based on model type"""
+    # Since we've already imported the correct HiddenStateExtractor based on model type,
+    # we can just use it directly
+    return HiddenStateExtractor(model_path)
 
 # ============================================================================
 # GLOBAL CONFIGURATION
@@ -1114,6 +1159,26 @@ def main():
     # Set up signal handler for graceful exit
     signal.signal(signal.SIGINT, signal_handler)
 
+    # Support both LLaVA and Qwen models
+    import sys
+
+    # Check command line arguments for model specification
+    if len(sys.argv) > 1:
+        model_arg = sys.argv[1].lower()
+        if model_arg == 'qwen':
+            model_path = "./model/Qwen2.5-VL-3B-Instruct"
+            model_type = 'qwen'
+        elif model_arg == 'llava':
+            model_path = "model/llava-v1.6-vicuna-7b/"
+            model_type = 'llava'
+        else:
+            print(f"Unknown model type: {model_arg}. Use 'llava' or 'qwen'")
+            sys.exit(1)
+    else:
+        # Default to LLaVA for backward compatibility
+        model_path = "model/llava-v1.6-vicuna-7b/"
+        model_type = 'llava'
+
     # Set random seed for reproducibility (use consistent seed)
     MAIN_SEED = 42  # Match the seed used elsewhere in the script
     random.seed(MAIN_SEED)
@@ -1133,14 +1198,14 @@ def main():
 
     print(f"Random seeds set for reproducibility (seed={MAIN_SEED})")
 
-    model_path = "model/llava-v1.6-vicuna-7b/"
-
-    # Initialize feature extractor
-    extractor = HiddenStateExtractor(model_path)
+    # Initialize model-specific feature extractor
+    extractor = get_model_specific_extractor(model_path, model_type)
 
     print("="*80)
-    print("BALANCED OOD-BASED JAILBREAK DETECTION USING KCD WITH LAYER-SPECIFIC PROJECTIONS")
+    print(f"BALANCED OOD-BASED JAILBREAK DETECTION USING KCD WITH LAYER-SPECIFIC PROJECTIONS ({model_type.upper()})")
     print("="*80)
+    print(f"Model: {model_path}")
+    print(f"Model type: {model_type}")
     print("Approach: Use BOTH benign and malicious prompts for training")
     print("          Compute contrastive score: distance_to_malicious - distance_to_benign")
     print("          Apply L2 normalization and Euclidean distance")
@@ -1547,8 +1612,8 @@ def main():
 
     layer_individual_avg_scores.sort(key=lambda x: x[1], reverse=True)
 
-    # Save results to CSV
-    output_path = "results/balanced_kcd_results.csv"
+    # Save results to CSV with model-specific filename
+    output_path = f"results/balanced_kcd_{model_type}_results.csv"
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Layer", "Dataset", "Method", "Accuracy", "F1", "TPR", "FPR", "AUROC", "AUPRC", "Threshold", "Combined_Rank", "Individual_Rank"])

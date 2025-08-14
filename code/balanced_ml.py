@@ -35,9 +35,48 @@ warnings.filterwarnings("ignore", message=".*TypedStorage is deprecated.*")
 warnings.filterwarnings("ignore", message=".*Palette images with Transparency.*")
 
 from load_datasets import *
-from feature_extractor import HiddenStateExtractor
 from generic_classifier import train_generic_classifier, evaluate_generic_classifier
 from sklearn.metrics import balanced_accuracy_score
+
+# Smart import handling based on command line arguments and available dependencies
+import sys
+
+def detect_model_from_args():
+    """Detect model type from command line arguments"""
+    if len(sys.argv) > 1:
+        model_arg = sys.argv[1].lower()
+        if model_arg == 'qwen':
+            return 'qwen'
+        elif model_arg == 'llava':
+            return 'llava'
+    return 'llava'  # Default
+
+# Determine which model we're using
+REQUESTED_MODEL = detect_model_from_args()
+
+# Import appropriate dependencies based on requested model
+if REQUESTED_MODEL == 'qwen':
+    try:
+        from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
+        from qwen_vl_utils import process_vision_info
+        from feature_extractor_qwen import HiddenStateExtractor
+        QWEN_AVAILABLE = True
+        LLAVA_AVAILABLE = False
+        print("Using Qwen model configuration")
+    except ImportError as e:
+        print(f"Error: Qwen dependencies not available: {e}")
+        print("Please install: pip install qwen-vl-utils transformers>=4.37.0")
+        sys.exit(1)
+else:
+    try:
+        from feature_extractor import HiddenStateExtractor
+        LLAVA_AVAILABLE = True
+        QWEN_AVAILABLE = False
+        print("Using LLaVA model configuration")
+    except ImportError as e:
+        print(f"Error: LLaVA dependencies not available: {e}")
+        print("Please install LLaVA dependencies")
+        sys.exit(1)
 
 # ============================================================================
 # GLOBAL CONFIGURATION
@@ -63,6 +102,23 @@ CONFIG = MLConfig()
 # GPU device setup
 GPU_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 print(f"Using device: {GPU_DEVICE}")
+
+def detect_model_type(model_path):
+    """Detect whether the model is LLaVA or Qwen based on path"""
+    model_path_lower = model_path.lower()
+    if 'qwen' in model_path_lower:
+        return 'qwen'
+    elif 'llava' in model_path_lower:
+        return 'llava'
+    else:
+        # Default to LLaVA for backward compatibility
+        return 'llava'
+
+def get_model_specific_extractor(model_path, model_type):
+    """Get the appropriate feature extractor based on model type"""
+    # Since we've already imported the correct HiddenStateExtractor based on model type,
+    # we can just use it directly
+    return HiddenStateExtractor(model_path)
 
 class GPULinearClassifier(nn.Module):
     """GPU-accelerated linear classifier"""
@@ -931,11 +987,31 @@ def save_layer_rankings(results, layers, model_types):
         print(f" {layer_idx:2d}   | {best_method.upper():11s} | {best_auroc_str} |  {best_acc:.4f}  | {best_f1_str} | {best_tpr_str} | {best_fpr_str} | {runner_method.upper():16s} | {runner_auroc_str}")
 
 def main():
-    model_path = "model/llava-v1.6-vicuna-7b/"
+    # Support both LLaVA and Qwen models
+    import sys
+
+    # Check command line arguments for model specification
+    if len(sys.argv) > 1:
+        model_arg = sys.argv[1].lower()
+        if model_arg == 'qwen':
+            model_path = "model/Qwen2.5-VL-3B-Instruct"
+            model_type = 'qwen'
+        elif model_arg == 'llava':
+            model_path = "model/llava-v1.6-vicuna-7b/"
+            model_type = 'llava'
+        else:
+            print(f"Unknown model type: {model_arg}. Use 'llava' or 'qwen'")
+            sys.exit(1)
+    else:
+        # Default to LLaVA for backward compatibility
+        model_path = "model/llava-v1.6-vicuna-7b/"
+        model_type = 'llava'
 
     print("="*80)
-    print("BALANCED JAILBREAK DETECTION WITH NEW DATASET CONFIGURATION")
+    print(f"BALANCED JAILBREAK DETECTION WITH NEW DATASET CONFIGURATION ({model_type.upper()})")
     print("="*80)
+    print(f"Model: {model_path}")
+    print(f"Model type: {model_type}")
 
     # Set random seed for reproducibility (use centralized seed)
     MAIN_SEED = CONFIG.MAIN_SEED
@@ -947,12 +1023,12 @@ def main():
 
     CONFIG.print_config()
     print(f"Random seeds set for reproducibility (seed={MAIN_SEED})")
-    
+
     # Load datasets using the same organized approach as other balanced_* scripts
     training_datasets, test_datasets = prepare_balanced_datasets_organized()
 
-    # Initialize feature extractor
-    extractor = HiddenStateExtractor(model_path)
+    # Initialize model-specific feature extractor
+    extractor = get_model_specific_extractor(model_path, model_type)
 
     # Extract hidden states for all datasets individually (with dataset-specific caching)
     print("\n--- Extracting Hidden States with Dataset-Specific Caching ---")
@@ -1093,12 +1169,12 @@ def main():
     total_test_size = len(test_labels)
 
     # Save results and generate summary
-    save_results_and_summary(results, layers, model_types, total_train_size, total_test_size)
+    save_results_and_summary(results, layers, model_types, total_train_size, total_test_size, model_type)
 
-def save_results_and_summary(results, layers, model_types, train_size, test_size):
+def save_results_and_summary(results, layers, model_types, train_size, test_size, model_type='llava'):
     """Save results to CSV and print summary"""
-    # Save results to CSV
-    output_path = "results/balanced_ml_results.csv"
+    # Save results to CSV with model-specific filename
+    output_path = f"results/balanced_ml_{model_type}_results.csv"
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Layer", "Model_Type", "Test_Accuracy", "Test_F1", "Test_TPR", "Test_FPR", "Test_AUROC", "Test_AUPRC", "Threshold", "Train_Size", "Test_Size"])
@@ -1179,7 +1255,7 @@ def save_results_and_summary(results, layers, model_types, train_size, test_size
     print("\nDetailed layer rankings and cross-method comparisons are shown above.")
 
     # Save results to CSV for multi-run compatibility
-    output_path = "results/balanced_ml_results.csv"
+    output_path = f"results/balanced_ml_{model_type}_results.csv"
     os.makedirs("results", exist_ok=True)
 
     # Calculate rankings based on accuracy (primary metric for ML methods)
@@ -1216,12 +1292,12 @@ def save_results_and_summary(results, layers, model_types, train_size, test_size
         writer.writeheader()
 
         for layer_idx in layers:
-            for model_type in model_types:
-                result = results[layer_idx][model_type]
+            for ml_model_type in model_types:
+                result = results[layer_idx][ml_model_type]
                 writer.writerow({
                     'Layer': layer_idx,
                     'Dataset': 'COMBINED',  # ML script uses combined balanced dataset
-                    'Method': f'ML_{model_type.upper()}',
+                    'Method': f'ML_{model_type.upper()}_{ml_model_type.upper()}',
                     'Accuracy': f"{result['accuracy']:.6f}",
                     'F1': f"{result['f1']:.6f}",
                     'TPR': f"{result['tpr']:.6f}" if not np.isnan(result['tpr']) else "N/A",
