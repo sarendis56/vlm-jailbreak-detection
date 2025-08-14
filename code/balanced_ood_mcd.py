@@ -88,8 +88,8 @@ class ProjectionConfig:
     PROJECTION_LR_SCHEDULER = 'cosine'
     PROJECTION_MAX_PATIENCE = 15
 
-    # Architecture settings
-    INPUT_DIM = 4096
+    # Architecture settings (will be set dynamically based on model)
+    INPUT_DIM = 4096  # Default for LLaVA, will be updated for Qwen (2048)
     OUTPUT_DIM = 256
     HIDDEN_DIM = 512
     DROPOUT = 0.3
@@ -97,6 +97,14 @@ class ProjectionConfig:
     # Loss weighting settings
     DATASET_LOSS_WEIGHT = 1.0      # Weight for dataset classification loss
     TOXICITY_LOSS_WEIGHT = 5.0     # Weight for toxicity detection loss (higher to balance magnitude)
+
+    @classmethod
+    def set_model_dimensions(cls, model_type):
+        """Set input dimensions based on model type"""
+        if model_type.lower() == 'qwen':
+            cls.INPUT_DIM = 2048  # Qwen2.5-VL uses 2048 dimensions
+        else:
+            cls.INPUT_DIM = 4096  # LLaVA uses 4096 dimensions
 
     @classmethod
     def print_config(cls):
@@ -156,11 +164,13 @@ def get_gpu_memory_info():
 
 class LearnedProjection(nn.Module):
     """
-    Learned projection from 4096 to 256 dimensions with multi-objective loss:
+    Learned projection from input_dim to 256 dimensions with multi-objective loss:
     1. Samples from same dataset should be close
     2. Samples from different datasets should be far
     3. Benign centroids should be close, malicious centroids should be close,
        but benign and malicious centroids should be far apart
+
+    Input dimensions: 4096 for LLaVA, 2048 for Qwen
     """
 
     def __init__(self, input_dim=None, output_dim=None, hidden_dim=None, dropout=None):
@@ -212,7 +222,7 @@ def train_learned_projection(features_dict, labels_dict, input_dim=None, output_
     Args:
         features_dict: Dict of {dataset_name: features_array}
         labels_dict: Dict of {dataset_name: labels_array}
-        input_dim: Input feature dimension (4096)
+        input_dim: Input feature dimension (4096 for LLaVA, 2048 for Qwen)
         output_dim: Output feature dimension (256)
         epochs: Number of training epochs
         batch_size: Training batch size
@@ -424,7 +434,7 @@ def train_learned_projection(features_dict, labels_dict, input_dim=None, output_
 
 def apply_learned_projection(model, features_dict, device=None):
     """
-    Apply the learned projection to transform features from 4096 to 256 dimensions
+    Apply the learned projection to transform features to 256 dimensions
 
     Args:
         model: Trained projection model
@@ -1360,6 +1370,9 @@ def main():
     num_layers = layer_end - layer_start + 1
     print(f"Model layer range: {layer_start}-{layer_end} ({num_layers} layers)")
 
+    # Set projection dimensions based on model type
+    ProjectionConfig.set_model_dimensions(model_type)
+
     print("="*80)
     print(f"BALANCED OOD-BASED JAILBREAK DETECTION USING MCD WITH LAYER-SPECIFIC PROJECTIONS ({model_type.upper()})")
     print("="*80)
@@ -1369,7 +1382,7 @@ def main():
     print("          Use balanced jailbreak examples as OOD clusters")
     print("          Apply contrastive Mahalanobis distance for detection")
     print("          Enhanced with Ledoit-Wolf covariance for 256-dimensional projected features")
-    print("          Layer-specific projections: 4096 -> 256 dimensions per layer")
+    print(f"          Layer-specific projections: {ProjectionConfig.INPUT_DIM} -> {ProjectionConfig.OUTPUT_DIM} dimensions per layer")
     print("          Multi-objective contrastive loss for optimal feature learning")
     print("="*80)
     print("Training Set (2,000 examples, 1:1 ratio):")
@@ -1478,7 +1491,7 @@ def main():
 
     elif CONFIG.PROJECTION_MODE == "layer_specific":
         print(f"\n=== Training Layer-Specific Projections ===")
-        print("Training separate projection models for each layer (0-31)")
+        print(f"Training separate projection models for each layer ({layer_start}-{layer_end})")
 
         for layer_idx in layers:
             print(f"\n--- Training Projection for Layer {layer_idx} ---")
@@ -1528,7 +1541,7 @@ def main():
                 layer_hidden_states[dataset_name] = all_hidden_states[dataset_name][layer_idx]
                 layer_labels[dataset_name] = all_labels[dataset_name]
 
-        # Apply layer-specific learned projection to transform features from 4096 to 256 dimensions
+        # Apply layer-specific learned projection to transform features to 256 dimensions
         # Note: Projection was trained ONLY on training data, now applied to all data
         # print(f"  Applying layer-specific projection to layer {layer_idx} features...")
         projected_layer_hidden_states = apply_learned_projection(

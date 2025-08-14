@@ -87,8 +87,8 @@ class ProjectionConfig:
     PROJECTION_LR_SCHEDULER = 'cosine'
     PROJECTION_MAX_PATIENCE = 15
 
-    # Architecture settings
-    INPUT_DIM = 4096
+    # Architecture settings (will be set dynamically based on model)
+    INPUT_DIM = 4096  # Default for LLaVA, will be updated for Qwen (2048)
     OUTPUT_DIM = 256
     HIDDEN_DIM = 512
     DROPOUT = 0.3
@@ -96,6 +96,14 @@ class ProjectionConfig:
     # Loss weighting settings
     DATASET_LOSS_WEIGHT = 1.0      # Weight for dataset classification loss
     TOXICITY_LOSS_WEIGHT = 5.0     # Weight for toxicity detection loss (higher to balance magnitude)
+
+    @classmethod
+    def set_model_dimensions(cls, model_type):
+        """Set input dimensions based on model type"""
+        if model_type.lower() == 'qwen':
+            cls.INPUT_DIM = 2048  # Qwen2.5-VL uses 2048 dimensions
+        else:
+            cls.INPUT_DIM = 4096  # LLaVA uses 4096 dimensions
 
     @classmethod
     def print_config(cls):
@@ -1206,6 +1214,9 @@ def main():
     num_layers = layer_end - layer_start + 1
     print(f"Model layer range: {layer_start}-{layer_end} ({num_layers} layers)")
 
+    # Set projection dimensions based on model type
+    ProjectionConfig.set_model_dimensions(model_type)
+
     print("="*80)
     print(f"BALANCED OOD-BASED JAILBREAK DETECTION USING KCD WITH LAYER-SPECIFIC PROJECTIONS ({model_type.upper()})")
     print("="*80)
@@ -1214,7 +1225,7 @@ def main():
     print("Approach: Use BOTH benign and malicious prompts for training")
     print("          Compute contrastive score: distance_to_malicious - distance_to_benign")
     print("          Apply L2 normalization and Euclidean distance")
-    print("          Enhanced with layer-specific projections: 4096 -> 256 dimensions per layer")
+    print(f"          Enhanced with layer-specific projections: {ProjectionConfig.INPUT_DIM} -> {ProjectionConfig.OUTPUT_DIM} dimensions per layer")
     print("          Multi-objective contrastive loss for optimal feature learning")
     print("          Enhanced with GPU acceleration for distance computation")
     print("="*80)
