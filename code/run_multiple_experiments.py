@@ -99,7 +99,7 @@ def modify_seed_in_file(filepath, new_seed):
     with open(filepath, 'w') as f:
         f.write(modified_content)
 
-def run_single_experiment(script_path, seed, run_id, total_runs, working_dir):
+def run_single_experiment(script_path, seed, run_id, total_runs, working_dir, model_type=None, script_name=None):
     """Run a single experiment with given seed"""
     print(f"\n{'='*80}")
     print(f"RUNNING EXPERIMENT {run_id}/{total_runs} WITH SEED {seed}")
@@ -120,8 +120,13 @@ def run_single_experiment(script_path, seed, run_id, total_runs, working_dir):
         print(f"Running script: {script_relative}")
         print(f"Using seed: {seed}")
 
-        result = subprocess.run([sys.executable, script_relative],
-                              capture_output=True, text=True, cwd=working_dir)
+        # Build command - only add model argument for supported scripts
+        cmd = [sys.executable, script_relative]
+        if model_type and script_name in ['mcd', 'kcd', 'ml']:
+            cmd.append(model_type)
+            print(f"Using model: {model_type}")
+
+        result = subprocess.run(cmd, capture_output=True, text=True, cwd=working_dir)
 
         if result.returncode != 0:
             print(f"ERROR in run {run_id}:")
@@ -466,8 +471,10 @@ def main():
     parser = argparse.ArgumentParser(description='Run multiple experiments with different seeds')
     parser.add_argument('--script', required=True, choices=['mcd', 'kcd', 'ml', 'learned-ml', 'pca-ml'],
                        help='Which script to run (mcd, kcd, ml, learned-ml, or pca-ml)')
-    parser.add_argument('--runs', type=int, default=20,
-                       help='Number of runs (default: 20)')
+    parser.add_argument('--model', choices=['llava', 'qwen'], default='llava',
+                       help='Model type to use (llava or qwen, default: llava). Only applies to mcd, kcd, and ml scripts.')
+    parser.add_argument('--runs', type=int, default=50,
+                       help='Number of runs (default: 50)')
     parser.add_argument('--seeds', nargs='+', type=int,
                        help='Custom seeds to use (if not provided, will use consecutive seeds starting from 42)')
     parser.add_argument('--output-dir', default='multi_run_results',
@@ -476,10 +483,11 @@ def main():
     # Add usage examples in help
     parser.epilog = """
 Examples:
-  python run_multiple_experiments.py --script pca-ml --runs 10
-  python run_multiple_experiments.py --script pca-ml --runs 5 --seeds 42 43 44 45 46
-  python run_multiple_experiments.py --script learned-ml --runs 20
-  python run_multiple_experiments.py --script mcd --runs 30 --output-dir my_results
+  python run_multiple_experiments.py --script mcd --model qwen --runs 10
+  python run_multiple_experiments.py --script kcd --model qwen --runs 5 --seeds 42 43 44 45 46
+  python run_multiple_experiments.py --script ml --model llava --runs 20
+  python run_multiple_experiments.py --script learned-ml --runs 20  (model parameter ignored)
+  python run_multiple_experiments.py --script pca-ml --runs 10      (model parameter ignored)
 """
     
     args = parser.parse_args()
@@ -490,16 +498,16 @@ Examples:
 
     if args.script == 'mcd':
         script_path = script_dir / 'balanced_ood_mcd.py'
-        expected_csv = 'results/balanced_mcd_results.csv'
-        method_name = 'MCD_k_MultiSeed'
+        expected_csv = f'results/balanced_mcd_{args.model}_results.csv'
+        method_name = f'MCD_k_MultiSeed_{args.model.upper()}'
     elif args.script == 'kcd':
         script_path = script_dir / 'balanced_ood_kcd.py'
-        expected_csv = 'results/balanced_kcd_results.csv'
-        method_name = 'KCD_MultiSeed'
+        expected_csv = f'results/balanced_kcd_{args.model}_results.csv'
+        method_name = f'KCD_MultiSeed_{args.model.upper()}'
     elif args.script == 'ml':
         script_path = script_dir / 'balanced_ml.py'
-        expected_csv = 'results/balanced_ml_results.csv'
-        method_name = 'ML_MultiSeed'
+        expected_csv = f'results/balanced_ml_{args.model}_results.csv'
+        method_name = f'ML_MultiSeed_{args.model.upper()}'
     elif args.script == 'learned-ml':
         script_path = script_dir / 'balanced_ood_ml.py'
         expected_csv = 'results/balanced_ood_ml_results.csv'
@@ -532,10 +540,15 @@ Examples:
 
     # Create run-specific subdirectory with timestamp
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = output_dir / f"{args.script}_{args.runs}runs_{timestamp}"
+    if args.script in ['mcd', 'kcd', 'ml']:
+        run_dir = output_dir / f"{args.script}_{args.model}_{args.runs}runs_{timestamp}"
+    else:
+        run_dir = output_dir / f"{args.script}_{args.runs}runs_{timestamp}"
     run_dir.mkdir(exist_ok=True)
     
     print(f"Running {args.runs} experiments with {args.script.upper()} method")
+    if args.script in ['mcd', 'kcd', 'ml']:
+        print(f"Model: {args.model.upper()}")
     print(f"Seeds: {seeds}")
     print(f"Results will be saved to: {run_dir}")
     
@@ -544,7 +557,7 @@ Examples:
     successful_runs = 0
     
     for i, seed in enumerate(seeds, 1):
-        success = run_single_experiment(script_path, seed, i, args.runs, working_dir)
+        success = run_single_experiment(script_path, seed, i, args.runs, working_dir, args.model, args.script)
 
         if success:
             # Move the generated CSV to run directory (CSV is generated in working_dir)

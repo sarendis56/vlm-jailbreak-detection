@@ -4,6 +4,8 @@ Analyze correlation between principled layer selection scores and actual perform
 
 This script compares the theoretical layer rankings from principled_layer_selection_results.csv
 with the empirical performance from multi-run experiments (F1 and AUROC).
+
+Supports both LLaVA and Qwen models with automatic model detection.
 """
 
 import pandas as pd
@@ -13,30 +15,75 @@ import seaborn as sns
 from pathlib import Path
 import glob
 import os
+import sys
 
-def load_principled_scores():
+def load_principled_scores(model_type=None):
     """Load the principled layer selection results"""
     # Try different possible paths depending on where script is run from
-    possible_paths = [
-        "results/principled_layer_selection_results.csv",  # Run from HiddenDetect directory
-        "HiddenDetect/results/principled_layer_selection_results.csv"  # Run from parent directory
+    base_paths = [
+        "results/",  # Run from project directory
+        "HiddenDetect/results/"  # Run from parent directory
     ]
 
+    # Model-specific filenames
+    if model_type:
+        # If specific model type provided, try multiple variations
+        if model_type == "qwen":
+            model_filenames = [
+                "principled_layer_selection_results_qwen25vl_3b.csv",
+                "principled_layer_selection_results_qwen25vl_7b.csv",
+                "principled_layer_selection_results_qwen25vl.csv",
+                "principled_layer_selection_results_qwen.csv"
+            ]
+        elif model_type == "llava":
+            model_filenames = [
+                "principled_layer_selection_results_llava_7b.csv",
+                "principled_layer_selection_results_llava_13b.csv",
+                "principled_layer_selection_results_llava.csv"
+            ]
+        else:
+            model_filenames = [f"principled_layer_selection_results_{model_type}.csv"]
+    else:
+        # Try all possible model-specific files and fallback
+        model_filenames = [
+            "principled_layer_selection_results_qwen25vl_3b.csv",
+            "principled_layer_selection_results_qwen25vl_7b.csv",
+            "principled_layer_selection_results_qwen25vl.csv",
+            "principled_layer_selection_results_llava_7b.csv",
+            "principled_layer_selection_results_llava_13b.csv",
+            "principled_layer_selection_results_llava.csv",
+            "principled_layer_selection_results.csv"  # Fallback to old naming
+        ]
+
     scores_path = None
-    for path in possible_paths:
-        if os.path.exists(path):
-            scores_path = path
+    for base_path in base_paths:
+        for filename in model_filenames:
+            path = base_path + filename
+            if os.path.exists(path):
+                scores_path = path
+                # Extract model type from filename for later use
+                if "qwen" in filename.lower():
+                    detected_model = "qwen"
+                elif "llava" in filename.lower():
+                    detected_model = "llava"
+                else:
+                    detected_model = "unknown"
+                break
+        if scores_path:
             break
 
     if scores_path is None:
-        print(f"Error: principled_layer_selection_results.csv not found in any of these locations:")
-        for path in possible_paths:
-            print(f"  - {path}")
-        return None
+        print(f"Error: No principled layer selection results found!")
+        print("Looked for files:")
+        for base_path in base_paths:
+            for filename in model_filenames:
+                print(f"  - {base_path + filename}")
+        return None, None
 
     df = pd.read_csv(scores_path)
     print(f"Loaded principled scores for {len(df)} layers from: {scores_path}")
-    return df
+    print(f"Detected model type: {detected_model}")
+    return df, detected_model
 
 def find_latest_multi_run_results():
     """Find the latest multi-run results for each method"""
@@ -163,13 +210,15 @@ def load_performance_data(results_dirs):
 
     return all_data
 
-def create_f1_correlation_plot(principled_scores, performance_data, output_dir=None):
+
+
+def create_f1_correlation_plot(principled_scores, performance_data, model_type="unknown", output_dir=None):
     """Create F1 correlation plot"""
 
     # Determine output directory based on current working directory
     if output_dir is None:
         if os.path.exists("results"):
-            output_dir = "results"  # Run from HiddenDetect directory
+            output_dir = "results"  # Run from project directory
         else:
             output_dir = "HiddenDetect/results"  # Run from parent directory
 
@@ -191,7 +240,10 @@ def create_f1_correlation_plot(principled_scores, performance_data, output_dir=N
     ax1.set_ylabel('Overall Score', color='blue', fontsize=12)
     ax1.tick_params(axis='y', labelcolor='blue')
     ax1.set_ylim(0, 1.0)
-    ax1.set_xlim(-1, 32)
+
+    # Set x-axis limits based on aligned data
+    max_layer = principled_scores['Layer'].max()
+    ax1.set_xlim(-1, max_layer + 1)
 
     # Line plots for F1 scores (right y-axis)
     colors = ['red', 'green', 'orange', 'purple', 'brown']
@@ -213,25 +265,32 @@ def create_f1_correlation_plot(principled_scores, performance_data, output_dir=N
     # Add legends
     ax1.legend(loc='upper left', fontsize=11)
     ax1_twin.legend(loc='upper right', fontsize=11)
-    ax1.set_title('F1 Score vs Overall Score by Layer', fontsize=16, fontweight='bold', pad=20)
+
+    # Update title to include model type
+    model_title = model_type.upper() if model_type != "unknown" else ""
+    title = f'F1 Score vs Overall Score by Layer ({model_title})' if model_title else 'F1 Score vs Overall Score by Layer'
+    ax1.set_title(title, fontsize=16, fontweight='bold', pad=20)
     ax1.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
-    # Save as PDF
-    output_path = f"{output_dir}/f1_correlation_plot.pdf"
+    # Save as PDF with model-specific name
+    if model_type != "unknown":
+        output_path = f"{output_dir}/f1_correlation_plot_{model_type}.pdf"
+    else:
+        output_path = f"{output_dir}/f1_correlation_plot.pdf"
     plt.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight')
     print(f"F1 correlation plot saved to: {output_path}")
 
     plt.close()
 
-def create_auroc_correlation_plot(principled_scores, performance_data, output_dir=None):
+def create_auroc_correlation_plot(principled_scores, performance_data, model_type="unknown", output_dir=None):
     """Create AUROC correlation plot"""
 
     # Determine output directory based on current working directory
     if output_dir is None:
         if os.path.exists("results"):
-            output_dir = "results"  # Run from HiddenDetect directory
+            output_dir = "results"  # Run from project directory
         else:
             output_dir = "HiddenDetect/results"  # Run from parent directory
 
@@ -253,7 +312,10 @@ def create_auroc_correlation_plot(principled_scores, performance_data, output_di
     ax2.set_ylabel('Overall Score', color='blue', fontsize=12)
     ax2.tick_params(axis='y', labelcolor='blue')
     ax2.set_ylim(0, 1.0)
-    ax2.set_xlim(-1, 32)
+
+    # Set x-axis limits based on aligned data
+    max_layer = principled_scores['Layer'].max()
+    ax2.set_xlim(-1, max_layer + 1)
 
     # Line plots for AUROC scores (right y-axis)
     colors = ['red', 'green', 'orange', 'purple', 'brown']
@@ -275,13 +337,20 @@ def create_auroc_correlation_plot(principled_scores, performance_data, output_di
     # Add legends
     ax2.legend(loc='upper left', fontsize=11)
     ax2_twin.legend(loc='upper right', fontsize=11)
-    ax2.set_title('AUROC vs Overall Score by Layer', fontsize=16, fontweight='bold', pad=20)
+
+    # Update title to include model type
+    model_title = model_type.upper() if model_type != "unknown" else ""
+    title = f'AUROC vs Overall Score by Layer ({model_title})' if model_title else 'AUROC vs Overall Score by Layer'
+    ax2.set_title(title, fontsize=16, fontweight='bold', pad=20)
     ax2.grid(True, alpha=0.3)
 
     plt.tight_layout()
 
-    # Save as PDF
-    output_path = f"{output_dir}/auroc_correlation_plot.pdf"
+    # Save as PDF with model-specific name
+    if model_type != "unknown":
+        output_path = f"{output_dir}/auroc_correlation_plot_{model_type}.pdf"
+    else:
+        output_path = f"{output_dir}/auroc_correlation_plot.pdf"
     plt.savefig(output_path, format='pdf', dpi=300, bbox_inches='tight')
     print(f"AUROC correlation plot saved to: {output_path}")
 
@@ -348,13 +417,13 @@ def print_top_layers_comparison(principled_scores, performance_data, top_n=10):
             overlap_auroc = len(set(top_principled) & set(top_auroc))
             print(f"  AUROC overlap with principled: {overlap_auroc}/{top_n} ({overlap_auroc/top_n*100:.1f}%)")
 
-def create_summary_table(correlations, performance_data, output_dir=None):
+def create_summary_table(correlations, performance_data, model_type="unknown", output_dir=None):
     """Create a summary table of the analysis results"""
 
     # Determine output directory based on current working directory
     if output_dir is None:
         if os.path.exists("results"):
-            output_dir = "results"  # Run from HiddenDetect directory
+            output_dir = "results"  # Run from project directory
         else:
             output_dir = "HiddenDetect/results"  # Run from parent directory
 
@@ -381,9 +450,12 @@ def create_summary_table(correlations, performance_data, output_dir=None):
 
         summary_data.append(row)
 
-    # Create DataFrame and save
+    # Create DataFrame and save with model-specific name
     summary_df = pd.DataFrame(summary_data)
-    summary_path = f"{output_dir}/layer_correlation_summary.csv"
+    if model_type != "unknown":
+        summary_path = f"{output_dir}/layer_correlation_summary_{model_type}.csv"
+    else:
+        summary_path = f"{output_dir}/layer_correlation_summary.csv"
     summary_df.to_csv(summary_path, index=False)
 
     print(f"\nSummary table saved to: {summary_path}")
@@ -394,11 +466,25 @@ def main():
     print("="*80)
     print("LAYER PERFORMANCE CORRELATION ANALYSIS")
     print("="*80)
+    print("Usage: python analyze_layer_performance_correlation.py [qwen|llava]")
+    print("If no model type is specified, will auto-detect from available files.")
+    print("="*80)
+
+    # Parse command line arguments for model type
+    model_type_arg = None
+    if len(sys.argv) > 1:
+        model_type_arg = sys.argv[1].lower()
+        if model_type_arg not in ['qwen', 'llava']:
+            print(f"Warning: Unknown model type '{model_type_arg}'. Will auto-detect from files.")
+            model_type_arg = None
 
     # Load principled layer selection scores
-    principled_scores = load_principled_scores()
+    principled_scores, detected_model = load_principled_scores(model_type_arg)
     if principled_scores is None:
         return
+
+    # Use command line argument if provided, otherwise use detected model, fallback to "unknown"
+    model_type = model_type_arg if model_type_arg else (detected_model if detected_model else "unknown")
 
     # Find latest multi-run results
     results_dirs = find_latest_multi_run_results()
@@ -410,8 +496,8 @@ def main():
     performance_data = load_performance_data(results_dirs)
 
     # Create separate correlation plots
-    create_f1_correlation_plot(principled_scores, performance_data)
-    create_auroc_correlation_plot(principled_scores, performance_data)
+    create_f1_correlation_plot(principled_scores, performance_data, model_type)
+    create_auroc_correlation_plot(principled_scores, performance_data, model_type)
 
     # Compute correlations
     correlations = compute_correlations(principled_scores, performance_data)
@@ -420,21 +506,29 @@ def main():
     print_top_layers_comparison(principled_scores, performance_data, top_n=10)
 
     # Create summary table
-    create_summary_table(correlations, performance_data)
+    create_summary_table(correlations, performance_data, model_type)
 
     # Determine output directory for final messages
     if os.path.exists("results"):
-        results_dir = "results"  # Run from HiddenDetect directory
+        results_dir = "results"  # Run from project directory
     else:
         results_dir = "HiddenDetect/results"  # Run from parent directory
 
     print("\n" + "="*80)
     print("ANALYSIS COMPLETE")
     print("="*80)
+    print(f"Model type: {model_type.upper()}")
     print("Check the generated plots:")
-    print(f"  - F1 correlation: {results_dir}/f1_correlation_plot.pdf")
-    print(f"  - AUROC correlation: {results_dir}/auroc_correlation_plot.pdf")
-    print(f"Check the summary table: {results_dir}/layer_correlation_summary.csv")
+
+    # Show model-specific filenames
+    if model_type != "unknown":
+        print(f"  - F1 correlation: {results_dir}/f1_correlation_plot_{model_type}.pdf")
+        print(f"  - AUROC correlation: {results_dir}/auroc_correlation_plot_{model_type}.pdf")
+        print(f"Check the summary table: {results_dir}/layer_correlation_summary_{model_type}.csv")
+    else:
+        print(f"  - F1 correlation: {results_dir}/f1_correlation_plot.pdf")
+        print(f"  - AUROC correlation: {results_dir}/auroc_correlation_plot.pdf")
+        print(f"Check the summary table: {results_dir}/layer_correlation_summary.csv")
 
 if __name__ == "__main__":
     main()
