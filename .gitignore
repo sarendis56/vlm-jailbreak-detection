@@ -13,3 +13,5 @@ visualizations/
 ablation_results/
 analysis/figures/
 test*
+few_shot.zip
+few_shot
