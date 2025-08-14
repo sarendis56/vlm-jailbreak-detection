@@ -79,6 +79,81 @@ class HiddenStateExtractor:
         # So if model has 36 transformer layers, we get 37 hidden states (0-36)
         return 0, num_layers  # Include the extra embedding layer
 
+    def _resize_image_if_needed(self, image_path, max_size=448):
+        """Resize image if it's too large to prevent over-tokenization"""
+        try:
+            if image_path.startswith(('http://', 'https://')):
+                # Handle URL images
+                import requests
+                from PIL import Image
+                from io import BytesIO
+
+                response = requests.get(image_path, timeout=10)
+                img = Image.open(BytesIO(response.content))
+                original_path = image_path
+            else:
+                # Handle local file images
+                from PIL import Image
+                img = Image.open(image_path)
+                original_path = image_path
+
+            # Check if image is too large and resize if needed
+            width, height = img.size
+            if max(width, height) > max_size:
+                # Calculate new size maintaining aspect ratio
+                if width > height:
+                    new_width = max_size
+                    new_height = int(height * max_size / width)
+                else:
+                    new_height = max_size
+                    new_width = int(width * max_size / height)
+
+                # Additional check: if total pixels still too large, resize more aggressively
+                total_pixels = new_width * new_height
+                if total_pixels > 200_000:  # ~448x448 = 200k pixels
+                    # Force to square aspect ratio for very large images
+                    square_size = min(max_size, 336)  # Even smaller for problematic images
+                    new_width = square_size
+                    new_height = square_size
+                    # print(f"Aggressive resize: {width}x{height} -> {new_width}x{new_height} (forced square)")
+                else:
+                    # print(f"Resizing image from {width}x{height} to {new_width}x{new_height}")
+                    pass
+
+                img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                # Convert RGBA to RGB if necessary (for JPEG compatibility)
+                if img.mode in ('RGBA', 'LA', 'P'):
+                    # Create a white background
+                    background = Image.new('RGB', img.size, (255, 255, 255))
+                    if img.mode == 'P':
+                        img = img.convert('RGBA')
+                    background.paste(img, mask=img.split()[-1] if img.mode in ('RGBA', 'LA') else None)
+                    img = background
+                elif img.mode not in ('RGB', 'L'):
+                    img = img.convert('RGB')
+
+                # Save resized image temporarily
+                import tempfile
+                temp_path = tempfile.mktemp(suffix='.jpg')
+                img.save(temp_path, 'JPEG', quality=95)
+
+                # Store temp path for cleanup
+                if not hasattr(self, '_temp_files'):
+                    self._temp_files = []
+                self._temp_files.append(temp_path)
+
+                img.close()
+                return temp_path
+            else:
+                # Image is reasonable size, use as-is
+                img.close()
+                return original_path
+
+        except Exception as e:
+            print(f"Warning: Error resizing image {image_path}: {e}")
+            return image_path  # Return original path if resizing fails
+
     def _aggressive_cleanup(self):
         """Perform aggressive memory cleanup"""
         gc.collect()
@@ -137,14 +212,17 @@ class HiddenStateExtractor:
                     # Multiple comma-separated paths
                     image_files = [path.strip() for path in img_data.split(",")]
                     for img_path in image_files:
-                        if not img_path.startswith(("http://", "https://", "file://")):
-                            img_path = f"file://{os.path.abspath(img_path)}"
-                        content.append({"type": "image", "image": img_path})
+                        # Resize each image if needed
+                        resized_path = self._resize_image_if_needed(img_path)
+                        if not resized_path.startswith(("http://", "https://", "file://")):
+                            resized_path = f"file://{os.path.abspath(resized_path)}"
+                        content.append({"type": "image", "image": resized_path})
                 else:
-                    # Single path
-                    if not img_data.startswith(("http://", "https://", "file://")):
-                        img_data = f"file://{os.path.abspath(img_data)}"
-                    content.append({"type": "image", "image": img_data})
+                    # Single path - resize if too large
+                    img_path = self._resize_image_if_needed(img_data)
+                    if not img_path.startswith(("http://", "https://", "file://")):
+                        img_path = f"file://{os.path.abspath(img_path)}"
+                    content.append({"type": "image", "image": img_path})
 
             # Case 2: Binary image data - save to temp file and clean up immediately
             elif isinstance(img_data, bytes):
@@ -158,9 +236,11 @@ class HiddenStateExtractor:
             elif isinstance(img_data, list):
                 for item in img_data:
                     if isinstance(item, str):
-                        if not item.startswith(("http://", "https://", "file://")):
-                            item = f"file://{os.path.abspath(item)}"
-                        content.append({"type": "image", "image": item})
+                        # Resize each image if needed
+                        resized_item = self._resize_image_if_needed(item)
+                        if not resized_item.startswith(("http://", "https://", "file://")):
+                            resized_item = f"file://{os.path.abspath(resized_item)}"
+                        content.append({"type": "image", "image": resized_item})
                     elif isinstance(item, bytes):
                         with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as tmp_file:
                             tmp_file.write(item)
@@ -216,67 +296,75 @@ class HiddenStateExtractor:
                 messages = self._prepare_qwen_messages(sample)
 
                 # Process the messages using the processor
-                text = self.processor.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
-                vision_info = process_vision_info(messages)
-                image_inputs = vision_info[0] if len(vision_info) > 0 else None
-                video_inputs = vision_info[1] if len(vision_info) > 1 else None
-                inputs = self.processor(
-                    text=[text],
-                    images=image_inputs,
-                    videos=video_inputs,
-                    padding=True,
-                    return_tensors="pt",
-                )
+                try:
+                    text = self.processor.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
+                    vision_info = process_vision_info(messages)
+                    image_inputs = vision_info[0] if len(vision_info) > 0 else None
+                    video_inputs = vision_info[1] if len(vision_info) > 1 else None
+
+                    inputs = self.processor(
+                        text=[text],
+                        images=image_inputs,
+                        videos=video_inputs,
+                        padding=True,
+                        return_tensors="pt",
+                    )
+
+                    # Log pixel tensor size for monitoring (no fallback)
+                    if hasattr(inputs, 'pixel_values') and inputs.pixel_values is not None:
+                        pixel_size = inputs.pixel_values.numel()  # Total number of elements
+                        if pixel_size > 10_000_000:  # Just log large tensors
+                            print(f"Info: Large pixel tensor ({pixel_size:,} elements) - processing with images")
+                except Exception as e:
+                    print(f"Error in processor for sample {sample_idx}: {e}")
+                    # Re-raise the exception instead of fallback processing
+                    raise e
                 inputs = inputs.to(self.model.device)
 
-                # Truncate if sequence is too long - use conservative limit to prevent NaN
+                # Relax truncation to 8k tokens as Qwen2.5-VL can handle 32k
                 seq_len = inputs.input_ids.shape[1]
-                max_length = 4096  # Conservative limit to prevent NaN issues
+                max_length = 8192  # Increased limit to 8k tokens
                 if seq_len > max_length:
                     print(f"Warning: Truncating sequence from {seq_len} to {max_length} tokens")
                     inputs.input_ids = inputs.input_ids[:, :max_length]
                     if hasattr(inputs, 'attention_mask'):
                         inputs.attention_mask = inputs.attention_mask[:, :max_length]
+                    # Also check if we have pixel_values and limit them
+                    if hasattr(inputs, 'pixel_values') and inputs.pixel_values is not None:
+                        # If pixel values are too large, this might be causing issues
+                        pixel_shape = inputs.pixel_values.shape
+                        print(f"  Pixel values shape: {pixel_shape}")
+                        # Check for extreme values in pixel data
+                        if torch.isnan(inputs.pixel_values).any() or torch.isinf(inputs.pixel_values).any():
+                            print(f"  Warning: NaN/Inf detected in pixel values, skipping sample")
+                            # Add zero vectors for all layers
+                            for layer_idx in range(layer_start, layer_end+1):
+                                if len(all_hidden_states[layer_idx]) > 0:
+                                    zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
+                                else:
+                                    zero_vector = np.zeros(2048)
+                                all_hidden_states[layer_idx].append(zero_vector)
+                            labels.append(sample.get(label_key, 0))
+                            continue
 
                 with torch.no_grad():
                     outputs = self.model(**inputs, output_hidden_states=True)
 
-                    # Check if any hidden states contain NaN - if so, skip this sample
-                    has_nan_in_any_layer = False
-                    for hidden_state in outputs.hidden_states:
-                        if torch.isnan(hidden_state).any() or torch.isinf(hidden_state).any():
-                            has_nan_in_any_layer = True
-                            break
-
-                    if has_nan_in_any_layer:
-                        print(f"Warning: NaN/Inf detected in model outputs for sample {sample_idx}, skipping...")
-                        # Add zero vectors for all layers
-                        for layer_idx in range(layer_start, layer_end+1):
-                            if len(all_hidden_states[layer_idx]) > 0:
-                                zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
-                            else:
-                                zero_vector = np.zeros(2048)
-                            all_hidden_states[layer_idx].append(zero_vector)
-                    else:
-                        # Extract hidden states for specified layers
-                        for layer_idx in range(layer_start, layer_end+1):
-                            if layer_idx < len(outputs.hidden_states):
-                                hidden_state = outputs.hidden_states[layer_idx]
-                                # Use last token representation and immediately move to CPU
-                                last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()
-                                all_hidden_states[layer_idx].append(last_token_hidden)
-                                # Clear the hidden state from GPU memory
-                                del hidden_state
-                            else:
-                                print(f"Warning: Layer {layer_idx} not found in outputs (only {len(outputs.hidden_states)} layers available)")
-                                # Add zero vector for missing layers
-                                if len(all_hidden_states[layer_idx]) > 0:
-                                    zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
-                                else:
-                                    zero_vector = np.zeros(2048)  # Qwen2.5-VL-3B hidden size
-                                all_hidden_states[layer_idx].append(zero_vector)
+                    # Extract hidden states for specified layers (no NaN fallback)
+                    for layer_idx in range(layer_start, layer_end+1):
+                        if layer_idx < len(outputs.hidden_states):
+                            hidden_state = outputs.hidden_states[layer_idx]
+                            # Use last token representation and immediately move to CPU
+                            last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()
+                            all_hidden_states[layer_idx].append(last_token_hidden)
+                            # Clear the hidden state from GPU memory
+                            del hidden_state
+                        else:
+                            print(f"Warning: Layer {layer_idx} not found in outputs (only {len(outputs.hidden_states)} layers available)")
+                            # This should not happen with correct layer detection, but if it does, raise an error
+                            raise ValueError(f"Layer {layer_idx} not found in model outputs")
 
                 # Extract label
                 labels.append(sample.get(label_key, 0))
@@ -306,16 +394,8 @@ class HiddenStateExtractor:
                 # Emergency cleanup on error
                 self._aggressive_cleanup()
 
-                # Add zero vectors for failed samples
-                for layer_idx in range(layer_start, layer_end+1):
-                    if layer_idx in all_hidden_states and len(all_hidden_states[layer_idx]) > 0:
-                        zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
-                        all_hidden_states[layer_idx].append(zero_vector)
-                    else:
-                        # If no previous samples, create a default zero vector
-                        zero_vector = np.zeros(2048)  # Qwen2.5-VL-3B hidden size
-                        all_hidden_states[layer_idx].append(zero_vector)
-                labels.append(0)  # Default label for failed samples
+                # Re-raise the exception instead of creating zero vectors
+                raise e
 
         # Convert to numpy arrays
         for layer_idx in range(layer_start, layer_end+1):
@@ -334,4 +414,17 @@ class HiddenStateExtractor:
                           labels, metadata, dataset_size, experiment_name)
 
         self._aggressive_cleanup()
+        # Clean up temporary files
+        self._cleanup_temp_files()
         return all_hidden_states, labels, len(labels)
+
+    def _cleanup_temp_files(self):
+        """Clean up temporary resized image files"""
+        if hasattr(self, '_temp_files'):
+            for temp_file in self._temp_files:
+                try:
+                    if os.path.exists(temp_file):
+                        os.remove(temp_file)
+                except Exception as e:
+                    print(f"Warning: Could not remove temp file {temp_file}: {e}")
+            self._temp_files = []
