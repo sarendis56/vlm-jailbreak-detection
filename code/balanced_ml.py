@@ -907,7 +907,7 @@ def save_layer_rankings(results, layers, model_types):
         method_rankings[model_type] = layer_aurocs
 
     # Save rankings to CSV
-    rankings_path = "results/balanced_ml_results_ranking.csv"
+    rankings_path = "results/balanced_ml_results_ranking_{model_type}.csv"
     with open(rankings_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Method", "Rank", "Layer", "AUROC", "Accuracy", "F1", "TPR", "FPR", "AUPRC"])
@@ -1121,10 +1121,10 @@ def main():
         input_dim = X_train.shape[1]
         results[layer_idx] = {}
 
-        for model_type in model_types:
-            print(f"  Training {model_type.upper()} for layer {layer_idx}...")
+        for ml_model_type in model_types:
+            print(f"  Training {ml_model_type.upper()} for layer {layer_idx}...")
 
-            if model_type == 'mlp':
+            if ml_model_type == 'mlp':
                 # Train MLP using generic classifier WITHOUT threshold optimization
                 model = train_generic_classifier(
                     X_train, y_train,
@@ -1135,7 +1135,7 @@ def main():
                 )
 
                 # Use unified threshold optimization algorithm
-                print(f"    Optimizing threshold for {model_type.upper()}...")
+                print(f"    Optimizing threshold for {ml_model_type.upper()}...")
                 threshold_optimizer = ThresholdOptimizer()
                 optimal_threshold = threshold_optimizer.fit_threshold(model, X_train, y_train, model_type='mlp')
 
@@ -1147,10 +1147,10 @@ def main():
 
             else:
                 # Train linear classifier
-                model = train_linear_classifier(X_train, y_train, model_type)
+                model = train_linear_classifier(X_train, y_train, ml_model_type)
 
                 # Use unified threshold optimization algorithm
-                print(f"    Optimizing threshold for {model_type.upper()}...")
+                print(f"    Optimizing threshold for {ml_model_type.upper()}...")
                 threshold_optimizer = ThresholdOptimizer()
                 optimal_threshold = threshold_optimizer.fit_threshold(model, X_train, y_train, model_type='linear')
 
@@ -1158,7 +1158,7 @@ def main():
                 eval_results = evaluate_linear_classifier(model, X_test, y_test, threshold=optimal_threshold)
                 eval_results['threshold'] = optimal_threshold
 
-            results[layer_idx][model_type] = eval_results
+            results[layer_idx][ml_model_type] = eval_results
 
             # Handle NaN values for display
             f1_str = f"{eval_results['f1']:.4f}"
@@ -1167,47 +1167,78 @@ def main():
             auroc_str = "N/A" if np.isnan(eval_results['auroc']) else f"{eval_results['auroc']:.4f}"
             auprc_str = "N/A" if np.isnan(eval_results['auprc']) else f"{eval_results['auprc']:.4f}"
 
-            print(f"    {model_type.upper()} - Accuracy: {eval_results['accuracy']:.4f}, F1: {f1_str}, TPR: {tpr_str}, FPR: {fpr_str}, AUROC: {auroc_str}, AUPRC: {auprc_str}, Thresh: {eval_results['threshold']:.4f}")
+            print(f"    {ml_model_type.upper()} - Accuracy: {eval_results['accuracy']:.4f}, F1: {f1_str}, TPR: {tpr_str}, FPR: {fpr_str}, AUROC: {auroc_str}, AUPRC: {auprc_str}, Thresh: {eval_results['threshold']:.4f}")
 
     # Calculate total dataset sizes
     total_train_size = len(train_labels)
     total_test_size = len(test_labels)
 
-    # Save results and generate summary
+    # Save results and generate summary (model_type here refers to 'qwen'/'llava', not ML model types)
     save_results_and_summary(results, layers, model_types, total_train_size, total_test_size, model_type)
 
 def save_results_and_summary(results, layers, model_types, train_size, test_size, model_type='llava'):
     """Save results to CSV and print summary"""
-    # Save results to CSV with model-specific filename
+    # Save results to CSV with model-specific filename in format compatible with run_multiple_experiments.py
     output_path = f"results/balanced_ml_{model_type}_results.csv"
+    os.makedirs("results", exist_ok=True)
+
+    # Calculate rankings based on accuracy (primary metric for ML methods)
+    # Create list of (layer, ml_model_type, accuracy) for ranking
+    performance_list = []
+    for layer_idx in layers:
+        for ml_model_type in model_types:
+            result = results[layer_idx][ml_model_type]
+            performance_list.append((layer_idx, ml_model_type, result['accuracy']))
+
+    # Sort by accuracy (descending) for ranking
+    performance_list.sort(key=lambda x: x[2], reverse=True)
+
+    # Create ranking mappings
+    combined_ranks = {}  # (layer, ml_model) -> rank
+    individual_ranks = {}  # (layer, ml_model) -> rank
+
+    # Combined ranking (overall ranking across all layer-model combinations)
+    for rank, (layer_idx, ml_model_type, _) in enumerate(performance_list, 1):
+        combined_ranks[(layer_idx, ml_model_type)] = rank
+
+    # Individual ranking per layer (rank models within each layer)
+    for layer_idx in layers:
+        layer_performance = [(ml_model_type, results[layer_idx][ml_model_type]['accuracy'])
+                           for ml_model_type in model_types]
+        layer_performance.sort(key=lambda x: x[1], reverse=True)
+
+        for rank, (ml_model_type, _) in enumerate(layer_performance, 1):
+            individual_ranks[(layer_idx, ml_model_type)] = rank
+
     with open(output_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
-        writer.writerow(["Layer", "Model_Type", "Test_Accuracy", "Test_F1", "Test_TPR", "Test_FPR", "Test_AUROC", "Test_AUPRC", "Threshold", "Train_Size", "Test_Size"])
+        writer.writerow(["Layer", "Dataset", "Method", "Accuracy", "F1", "TPR", "FPR", "AUROC", "AUPRC", "Threshold", "Combined_Rank", "Individual_Rank"])
 
         for layer_idx in layers:
-            for model_type in model_types:
-                result = results[layer_idx][model_type]
+            for ml_model_type in model_types:
+                result = results[layer_idx][ml_model_type]
 
                 # Handle NaN values for CSV
-                f1_val = f"{result['f1']:.4f}"
-                tpr_val = "N/A" if np.isnan(result['tpr']) else f"{result['tpr']:.4f}"
-                fpr_val = "N/A" if np.isnan(result['fpr']) else f"{result['fpr']:.4f}"
-                auroc_val = "N/A" if np.isnan(result['auroc']) else f"{result['auroc']:.4f}"
-                auprc_val = "N/A" if np.isnan(result['auprc']) else f"{result['auprc']:.4f}"
-                threshold_val = f"{result['threshold']:.4f}"
+                f1_val = f"{result['f1']:.6f}"
+                tpr_val = f"{result['tpr']:.6f}" if not np.isnan(result['tpr']) else "N/A"
+                fpr_val = f"{result['fpr']:.6f}" if not np.isnan(result['fpr']) else "N/A"
+                auroc_val = f"{result['auroc']:.6f}" if not np.isnan(result['auroc']) else "N/A"
+                auprc_val = f"{result.get('auprc', 0.0):.6f}"
+                threshold_val = f"{result.get('threshold', 0.5):.6f}"
 
                 writer.writerow([
                     layer_idx,
-                    model_type.upper(),
-                    f"{result['accuracy']:.4f}",
+                    'COMBINED',  # ML script uses combined balanced dataset
+                    f'ML_{model_type.upper()}_{ml_model_type.upper()}',
+                    f"{result['accuracy']:.6f}",
                     f1_val,
                     tpr_val,
                     fpr_val,
                     auroc_val,
                     auprc_val,
                     threshold_val,
-                    train_size,
-                    test_size
+                    combined_ranks[(layer_idx, ml_model_type)],
+                    individual_ranks[(layer_idx, ml_model_type)]
                 ])
 
     print(f"\nResults saved to {output_path}")
@@ -1218,9 +1249,9 @@ def save_results_and_summary(results, layers, model_types, train_size, test_size
     # Print summary - find best performing model across all layers and types
     best_performance = []
     for layer_idx in layers:
-        for model_type in model_types:
-            result = results[layer_idx][model_type]
-            best_performance.append((layer_idx, model_type, result['accuracy']))
+        for ml_model_type in model_types:
+            result = results[layer_idx][ml_model_type]
+            best_performance.append((layer_idx, ml_model_type, result['accuracy']))
 
     best_performance.sort(key=lambda x: x[2], reverse=True)
     best_layer, best_model, best_accuracy = best_performance[0]
@@ -1236,31 +1267,30 @@ def save_results_and_summary(results, layers, model_types, train_size, test_size
     print(f"Models compared: {', '.join([m.upper() for m in model_types])}")
 
     print(f"\nTop 10 Performing Combinations:")
-    for i, (layer_idx, model_type, accuracy) in enumerate(best_performance[:10], 1):
-        result = results[layer_idx][model_type]
+    for i, (layer_idx, ml_model_type, accuracy) in enumerate(best_performance[:10], 1):
+        result = results[layer_idx][ml_model_type]
         auroc_str = "N/A" if np.isnan(result['auroc']) else f"{result['auroc']:.4f}"
         f1_str = f"{result['f1']:.4f}"
         tpr_str = "N/A" if np.isnan(result['tpr']) else f"{result['tpr']:.4f}"
         fpr_str = "N/A" if np.isnan(result['fpr']) else f"{result['fpr']:.4f}"
-        print(f"  {i:2d}. Layer {layer_idx} {model_type.upper()}: Acc={accuracy:.4f}, F1={f1_str}, TPR={tpr_str}, FPR={fpr_str}, AUROC={auroc_str}")
+        print(f"  {i:2d}. Layer {layer_idx} {ml_model_type.upper()}: Acc={accuracy:.4f}, F1={f1_str}, TPR={tpr_str}, FPR={fpr_str}, AUROC={auroc_str}")
 
     # Print model type comparison
     print(f"\nModel Type Performance Summary:")
     model_avg_performance = {}
-    for model_type in model_types:
-        accuracies = [results[layer_idx][model_type]['accuracy'] for layer_idx in layers]
-        aurocs = [results[layer_idx][model_type]['auroc'] for layer_idx in layers if not np.isnan(results[layer_idx][model_type]['auroc'])]
-        model_avg_performance[model_type] = np.mean(accuracies)
+    for ml_model_type in model_types:
+        accuracies = [results[layer_idx][ml_model_type]['accuracy'] for layer_idx in layers]
+        aurocs = [results[layer_idx][ml_model_type]['auroc'] for layer_idx in layers if not np.isnan(results[layer_idx][ml_model_type]['auroc'])]
+        model_avg_performance[ml_model_type] = np.mean(accuracies)
 
         auroc_avg = np.mean(aurocs) if aurocs else 0.0
         auroc_std = np.std(aurocs) if aurocs else 0.0
 
-        print(f"  {model_type.upper()}: Avg Accuracy = {np.mean(accuracies):.4f} ± {np.std(accuracies):.4f}, Avg AUROC = {auroc_avg:.4f} ± {auroc_std:.4f}")
+        print(f"  {ml_model_type.upper()}: Avg Accuracy = {np.mean(accuracies):.4f} ± {np.std(accuracies):.4f}, Avg AUROC = {auroc_avg:.4f} ± {auroc_std:.4f}")
 
     print("\nDetailed layer rankings and cross-method comparisons are shown above.")
 
-    # Save results to CSV for multi-run compatibility
-    output_path = f"results/balanced_ml_{model_type}_results.csv"
+    # The CSV has already been saved above in the correct format for multi-run compatibility
     os.makedirs("results", exist_ok=True)
 
     # Calculate rankings based on accuracy (primary metric for ML methods)
