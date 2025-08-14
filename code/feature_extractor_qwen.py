@@ -51,35 +51,23 @@ class HiddenStateExtractor:
         if self.model is None:
             self._load_model()
 
-        print(f"Debug: Inspecting model structure for layer detection...")
-        print(f"Debug: Model type: {type(self.model)}")
-        print(f"Debug: Model path: {self.model_path}")
-
         # For Qwen2.5-VL models, get the number of layers from the language model
         if hasattr(self.model, 'model') and hasattr(self.model.model, 'layers'):
             num_layers = len(self.model.model.layers)
-            print(f"Debug: Found layers via model.model.layers: {num_layers}")
         elif hasattr(self.model, 'language_model') and hasattr(self.model.language_model, 'model') and hasattr(self.model.language_model.model, 'layers'):
             num_layers = len(self.model.language_model.model.layers)
-            print(f"Debug: Found layers via language_model.model.layers: {num_layers}")
         else:
-            print(f"Debug: Could not find layers in model structure, checking config...")
             # Fallback: try to get from config
             if hasattr(self.model.config, 'num_hidden_layers'):
                 num_layers = self.model.config.num_hidden_layers
-                print(f"Debug: Found layers from config.num_hidden_layers: {num_layers}")
             else:
-                print(f"Debug: No num_hidden_layers in config, using model path fallback...")
                 # Default fallback based on model name
                 if '3B' in self.model_path or '3b' in self.model_path:
                     num_layers = 36
-                    print(f"Debug: Using 3B fallback: {num_layers}")
                 elif '7B' in self.model_path or '7b' in self.model_path:
                     num_layers = 28
-                    print(f"Debug: Using 7B fallback: {num_layers}")
                 else:
                     num_layers = 32
-                    print(f"Debug: Using default fallback: {num_layers}")
 
         print(f"Detected {num_layers} layers in model")
         return num_layers
@@ -87,7 +75,9 @@ class HiddenStateExtractor:
     def get_default_layer_range(self):
         """Get the default layer range for this model (all layers)"""
         num_layers = self._get_model_layers()
-        return 0, num_layers - 1  # 0-indexed, so last layer is num_layers - 1
+        # For Qwen, the model returns embedding layer + transformer layers
+        # So if model has 36 transformer layers, we get 37 hidden states (0-36)
+        return 0, num_layers  # Include the extra embedding layer
 
     def _aggressive_cleanup(self):
         """Perform aggressive memory cleanup"""
@@ -241,9 +231,11 @@ class HiddenStateExtractor:
                 )
                 inputs = inputs.to(self.model.device)
 
-                # Truncate if sequence is too long
-                max_length = getattr(self.model.config, 'max_position_embeddings', 32768)
-                if inputs.input_ids.shape[1] > max_length:
+                # Truncate if sequence is too long - use conservative limit to prevent NaN
+                seq_len = inputs.input_ids.shape[1]
+                max_length = 4096  # Conservative limit to prevent NaN issues
+                if seq_len > max_length:
+                    print(f"Warning: Truncating sequence from {seq_len} to {max_length} tokens")
                     inputs.input_ids = inputs.input_ids[:, :max_length]
                     if hasattr(inputs, 'attention_mask'):
                         inputs.attention_mask = inputs.attention_mask[:, :max_length]
@@ -251,15 +243,40 @@ class HiddenStateExtractor:
                 with torch.no_grad():
                     outputs = self.model(**inputs, output_hidden_states=True)
 
-                    # Extract hidden states for specified layers
-                    for layer_idx in range(layer_start, layer_end+1):
-                        if layer_idx < len(outputs.hidden_states):
-                            hidden_state = outputs.hidden_states[layer_idx]
-                            # Use last token representation and immediately move to CPU
-                            last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()
-                            all_hidden_states[layer_idx].append(last_token_hidden)
-                            # Clear the hidden state from GPU memory
-                            del hidden_state
+                    # Check if any hidden states contain NaN - if so, skip this sample
+                    has_nan_in_any_layer = False
+                    for hidden_state in outputs.hidden_states:
+                        if torch.isnan(hidden_state).any() or torch.isinf(hidden_state).any():
+                            has_nan_in_any_layer = True
+                            break
+
+                    if has_nan_in_any_layer:
+                        print(f"Warning: NaN/Inf detected in model outputs for sample {sample_idx}, skipping...")
+                        # Add zero vectors for all layers
+                        for layer_idx in range(layer_start, layer_end+1):
+                            if len(all_hidden_states[layer_idx]) > 0:
+                                zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
+                            else:
+                                zero_vector = np.zeros(2048)
+                            all_hidden_states[layer_idx].append(zero_vector)
+                    else:
+                        # Extract hidden states for specified layers
+                        for layer_idx in range(layer_start, layer_end+1):
+                            if layer_idx < len(outputs.hidden_states):
+                                hidden_state = outputs.hidden_states[layer_idx]
+                                # Use last token representation and immediately move to CPU
+                                last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()
+                                all_hidden_states[layer_idx].append(last_token_hidden)
+                                # Clear the hidden state from GPU memory
+                                del hidden_state
+                            else:
+                                print(f"Warning: Layer {layer_idx} not found in outputs (only {len(outputs.hidden_states)} layers available)")
+                                # Add zero vector for missing layers
+                                if len(all_hidden_states[layer_idx]) > 0:
+                                    zero_vector = np.zeros_like(all_hidden_states[layer_idx][0])
+                                else:
+                                    zero_vector = np.zeros(2048)  # Qwen2.5-VL-3B hidden size
+                                all_hidden_states[layer_idx].append(zero_vector)
 
                 # Extract label
                 labels.append(sample.get(label_key, 0))
@@ -296,7 +313,7 @@ class HiddenStateExtractor:
                         all_hidden_states[layer_idx].append(zero_vector)
                     else:
                         # If no previous samples, create a default zero vector
-                        zero_vector = np.zeros(4096)  # Default hidden size for Qwen
+                        zero_vector = np.zeros(2048)  # Qwen2.5-VL-3B hidden size
                         all_hidden_states[layer_idx].append(zero_vector)
                 labels.append(0)  # Default label for failed samples
 

@@ -124,7 +124,9 @@ class HiddenStateExtractor:
     def get_default_layer_range(self):
         """Get the default layer range for this model (all layers)"""
         num_layers = self._get_model_layers()
-        return 0, num_layers - 1  # 0-indexed, so last layer is num_layers - 1
+        # For LLaVA, the model returns embedding layer + transformer layers
+        # So if model has 32 transformer layers, we get 33 hidden states (0-32)
+        return 0, num_layers  # Include the extra embedding layer
     
     def _find_conv_mode(self, model_name):
         if "llama-2" in model_name.lower():
@@ -338,9 +340,19 @@ class HiddenStateExtractor:
 
                     # Extract last token hidden states for each layer and immediately move to CPU
                     for layer_idx in range(layer_start, layer_end+1):
-                        hidden_state = outputs.hidden_states[layer_idx + 1]  # +1 because hidden_states[0] is input embeddings
-                        last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()  # Get last token, flatten, move to CPU
-                        batch_hidden_states[layer_idx].append(last_token_hidden)
+                        # Now that we include all layers (0-32), we don't need the +1 offset
+                        if layer_idx < len(outputs.hidden_states):
+                            hidden_state = outputs.hidden_states[layer_idx]
+                            last_token_hidden = hidden_state[:, -1, :].cpu().numpy().flatten()  # Get last token, flatten, move to CPU
+                            batch_hidden_states[layer_idx].append(last_token_hidden)
+                        else:
+                            print(f"Warning: Layer {layer_idx} not found in outputs (only {len(outputs.hidden_states)} layers available)")
+                            # Add zero vector for missing layers
+                            if len(batch_hidden_states[layer_idx]) > 0:
+                                zero_vector = np.zeros_like(batch_hidden_states[layer_idx][0])
+                            else:
+                                zero_vector = np.zeros(4096)  # LLaVA hidden size
+                            batch_hidden_states[layer_idx].append(zero_vector)
 
                     batch_labels.append(sample[label_key])
 
