@@ -52,7 +52,23 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'code'))
 
 from load_datasets import *
-from feature_extractor import HiddenStateExtractor
+
+# Try to import the appropriate extractor based on available modules
+try:
+    from feature_extractor_qwen import HiddenStateExtractor as QwenHiddenStateExtractor
+    QWEN_AVAILABLE = True
+    print("✅ Qwen extractor imported successfully")
+except ImportError as e:
+    QWEN_AVAILABLE = False
+    print(f"❌ Qwen extractor import failed: {e}")
+
+try:
+    from feature_extractor import HiddenStateExtractor as LLaVAHiddenStateExtractor
+    LLAVA_AVAILABLE = True
+    print("✅ LLaVA extractor imported successfully")
+except ImportError as e:
+    LLAVA_AVAILABLE = False
+    print(f"❌ LLaVA extractor import failed: {e}")
 
 class LayerDiscriminativeAnalyzer:
     """
@@ -62,9 +78,46 @@ class LayerDiscriminativeAnalyzer:
     
     def __init__(self, model_path: str):
         self.model_path = model_path
-        self.extractor = HiddenStateExtractor(model_path)
+        # Determine model type from path and use appropriate extractor
+        if 'qwen' in model_path.lower() or 'Qwen' in model_path:
+            if not QWEN_AVAILABLE:
+                raise ImportError("Qwen extractor not available. Run in qwen25vl environment.")
+            self.extractor = QwenHiddenStateExtractor(model_path)
+        else:
+            if not LLAVA_AVAILABLE:
+                raise ImportError("LLaVA extractor not available. Run in llava environment.")
+            self.extractor = LLaVAHiddenStateExtractor(model_path)
         self.results = {}
-        
+
+    def _get_model_name_for_filename(self):
+        """Extract a clean model name for use in filenames"""
+        model_path = self.model_path.lower()
+        if 'qwen' in model_path:
+            if '3b' in model_path:
+                return 'qwen25vl_3b'
+            elif '7b' in model_path:
+                return 'qwen25vl_7b'
+            else:
+                return 'qwen25vl'
+        elif 'llava' in model_path:
+            if '7b' in model_path:
+                return 'llava_7b'
+            elif '13b' in model_path:
+                return 'llava_13b'
+            else:
+                return 'llava'
+        else:
+            # Fallback: use last part of path, cleaned up
+            import os
+            model_name = os.path.basename(model_path.rstrip('/'))
+            # Clean up the name for filename use
+            model_name = model_name.replace('-', '_').replace('.', '_').lower()
+            return model_name
+
+    def get_model_layer_range(self):
+        """Get the appropriate layer range for the current model"""
+        return self.extractor.get_default_layer_range()
+
     def load_sgxstest_dataset(self) -> List[Dict]:
         """
         Load the SGXSTest dataset from HuggingFace.
@@ -696,14 +749,19 @@ class LayerDiscriminativeAnalyzer:
 
         return ranking
 
-    def save_results(self, ranking: List[Tuple], output_path: str = "results/principled_layer_selection_results.csv"):
+    def save_results(self, ranking: List[Tuple], output_path: str = None):
         """
         Save detailed results to CSV file.
 
         Args:
             ranking: Layer ranking results
-            output_path: Output CSV file path
+            output_path: Output CSV file path (if None, auto-generate based on model)
         """
+        if output_path is None:
+            # Generate model-specific filename
+            model_name = self._get_model_name_for_filename()
+            output_path = f"results/principled_layer_selection_results_{model_name}.csv"
+
         print(f"\n--- Saving Results to {output_path} ---")
 
         # Prepare data for CSV
@@ -946,6 +1004,8 @@ def main():
     """
     Main function to run principled layer selection analysis.
     """
+    import sys
+
     print("="*100)
     print("PRINCIPLED LAYER SELECTION FOR JAILBREAK DETECTION")
     print("="*100)
@@ -953,14 +1013,27 @@ def main():
     print("for detecting jailbreaking attempts using comprehensive metrics.")
     print("="*100)
 
-    # Configuration
-    model_path = "model/llava-v1.6-vicuna-7b/"
-    layer_start = 0
-    layer_end = 31
+    # Configuration - support both LLaVA and Qwen
+    if len(sys.argv) > 1:
+        model_type = sys.argv[1].lower()
+        if model_type == 'qwen':
+            model_path = "model/Qwen2.5-VL-3B-Instruct"
+        elif model_type == 'llava':
+            model_path = "model/llava-v1.6-vicuna-7b/"
+        else:
+            print(f"Unknown model type: {model_type}. Use 'qwen' or 'llava'")
+            sys.exit(1)
+    else:
+        print("Usage: python principled_layer_selection.py [qwen|llava]")
+        sys.exit(1)
 
     # Initialize analyzer
     print(f"\nInitializing analyzer for model: {model_path}")
     analyzer = LayerDiscriminativeAnalyzer(model_path)
+
+    # Get dynamic layer range based on model
+    layer_start, layer_end = analyzer.get_model_layer_range()
+    print(f"Using layer range: {layer_start}-{layer_end} ({layer_end - layer_start + 1} layers)")
 
     # Load SGXSTest dataset
     print(f"\n--- Loading SGXSTest Dataset ---")
@@ -1007,7 +1080,7 @@ def main():
 
         # Additional analysis: Create visualization if matplotlib is available
         try:
-            create_visualization(ranking, composite_scores)
+            create_visualization(ranking, composite_scores, analyzer)
         except ImportError:
             print("\nNote: Install matplotlib and seaborn for visualization features")
         except Exception as e:
@@ -1018,7 +1091,10 @@ def main():
         print("="*100)
         print(f"✓ Analyzed {layer_end - layer_start + 1} layers using {len(dataset)} paired samples")
         print(f"✓ Recommended layer: {ranking[0][0]} (score: {ranking[0][1]:.4f})")
-        print(f"✓ Detailed results saved to: principled_layer_selection_results.csv")
+
+        # Show the actual filename that was saved
+        model_name = analyzer._get_model_name_for_filename()
+        print(f"✓ Detailed results saved to: principled_layer_selection_results_{model_name}.csv")
         print(f"✓ Use the recommended layer in your jailbreak detection pipeline")
         print("="*100)
 
@@ -1029,13 +1105,14 @@ def main():
         raise
 
 
-def create_visualization(ranking: List[Tuple], composite_scores: Dict):
+def create_visualization(ranking: List[Tuple], composite_scores: Dict, analyzer=None):
     """
     Create comprehensive visualization of layer analysis results with detailed rankings.
 
     Args:
         ranking: Layer ranking results
         composite_scores: Composite scores for each layer
+        analyzer: LayerDiscriminativeAnalyzer instance for model-specific naming
     """
     try:
         import matplotlib.pyplot as plt
@@ -1145,13 +1222,17 @@ def create_visualization(ranking: List[Tuple], composite_scores: Dict):
 
         plt.tight_layout()
 
-        # Save the plot
-        output_path = "results/layer_selection_analysis.png"
+        # Save the plot with model-specific name
+        if analyzer:
+            model_name = analyzer._get_model_name_for_filename()
+            output_path = f"results/layer_selection_analysis_{model_name}.png"
+        else:
+            output_path = "results/layer_selection_analysis.png"
         plt.savefig(output_path, dpi=300, bbox_inches='tight')
         print(f"Comprehensive visualization saved to: {output_path}")
 
         # Create second figure for remaining metrics
-        create_second_figure_with_remaining_metrics(composite_scores, layers, metrics[4:])
+        create_second_figure_with_remaining_metrics(composite_scores, layers, metrics[4:], analyzer)
 
         # Show the plot if in interactive environment
         try:
@@ -1237,7 +1318,7 @@ def create_individual_metric_rankings(axes, composite_scores, layers, metrics):
         bars[0].set_alpha(1.0)
 
 
-def create_second_figure_with_remaining_metrics(composite_scores, layers, remaining_metrics):
+def create_second_figure_with_remaining_metrics(composite_scores, layers, remaining_metrics, analyzer=None):
     """Create second figure for remaining individual metrics."""
     fig2, axes2 = plt.subplots(2, 2, figsize=(12, 10))
     fig2.suptitle('Individual Metric Rankings (Continued)', fontsize=14, fontweight='bold')
@@ -1272,8 +1353,12 @@ def create_second_figure_with_remaining_metrics(composite_scores, layers, remain
 
     plt.tight_layout()
 
-    # Save second figure
-    output_path2 = "results/individual_metrics_rankings.png"
+    # Save second figure with model-specific name
+    if analyzer:
+        model_name = analyzer._get_model_name_for_filename()
+        output_path2 = f"results/individual_metrics_rankings_{model_name}.png"
+    else:
+        output_path2 = "results/individual_metrics_rankings.png"
     plt.savefig(output_path2, dpi=300, bbox_inches='tight')
     print(f"Individual metrics rankings saved to: {output_path2}")
 
