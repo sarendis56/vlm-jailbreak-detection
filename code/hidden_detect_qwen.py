@@ -942,12 +942,12 @@ if __name__ == "__main__":
     train_dataset, test_dataset = create_balanced_datasets()
 
     print("\n--- Processing Training Set for Threshold Optimization ---")
-    train_labels, train_scores = test(train_dataset, model_path, s=24, e=34,
+    train_labels, train_scores = test(train_dataset, model_path, s=16, e=25,
                                     use_cache=True, dataset_name="hidden_detect_qwen_train_optimized",
                                     experiment_name="balanced_threshold_optimization_optimized")
 
     print("\n--- Processing Test Set ---")
-    test_labels, test_scores = test(test_dataset, model_path, s=24, e=34,
+    test_labels, test_scores = test(test_dataset, model_path, s=16, e=25,
                                   use_cache=True, dataset_name="hidden_detect_qwen_test_optimized",
                                   experiment_name="balanced_evaluation_optimized")
 
