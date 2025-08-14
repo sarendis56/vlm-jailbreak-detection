@@ -618,7 +618,7 @@ def load_advbench(max_samples=None):
 # AlpacaToxicQA removed - not used in current experiments
 
 def load_dan_prompts(max_samples=None):
-    """Load DAN (Do Anything Now) jailbreak prompts from TrustAIRLab/in-the-wild-jailbreak-prompts"""
+    """Load jailbreak prompts from TrustAIRLab/in-the-wild-jailbreak-prompts"""
     import json
 
     try:
@@ -686,34 +686,92 @@ def load_adversarial_img():
         return unsafe_set
 
 def load_vqav2(max_samples=None):
-    """Load VQAv2 dataset for multimodal benign samples"""
+    """Load VQAv2 dataset for multimodal benign samples from validation set"""
     import json
     import os
 
-    # Try both relative paths (from code directory and from HiddenDetect directory)
-    possible_paths = [
-        "data/VQAv2/vqav2_samples.json",
-        "../data/VQAv2/vqav2_samples.json"
+    # Define paths for VQAv2 dataset files
+    possible_base_paths = [
+        "data/VQAv2",
+        "../data/VQAv2"
     ]
 
-    for path in possible_paths:
-        try:
-            if os.path.exists(path):
-                with open(path, 'r', encoding='utf-8') as f:
-                    samples = json.load(f)
+    base_path = None
+    for path in possible_base_paths:
+        if os.path.exists(path):
+            base_path = path
+            break
 
-                total_available = len(samples)
-                if max_samples and max_samples < total_available:
-                    samples = samples[:max_samples]
-                    print(f"Successfully loaded {len(samples)} samples from VQAv2 (out of {total_available} available)")
-                else:
-                    print(f"Successfully loaded {len(samples)} samples from VQAv2 (all available)")
-                return samples
-        except Exception as e:
-            continue
+    if base_path is None:
+        print("VQAv2 dataset directory not found.")
+        return []
 
-    print("VQAv2 dataset not found.")
-    return []
+    questions_file = os.path.join(base_path, "v2_OpenEnded_mscoco_val2014_questions.json")
+    annotations_file = os.path.join(base_path, "v2_mscoco_val2014_annotations.json")
+    images_dir = os.path.join(base_path, "images", "val2014")
+
+    try:
+        # Load questions
+        with open(questions_file, 'r', encoding='utf-8') as f:
+            questions_data = json.load(f)
+
+        # Load annotations (answers)
+        with open(annotations_file, 'r', encoding='utf-8') as f:
+            annotations_data = json.load(f)
+
+        # Create mapping from question_id to annotation
+        annotations_map = {}
+        for annotation in annotations_data['annotations']:
+            annotations_map[annotation['question_id']] = annotation
+
+        # Build samples
+        samples = []
+        questions = questions_data['questions']
+
+        # Ensure deterministic sampling
+        ensure_deterministic_sampling()
+
+        # If max_samples is specified and less than total, sample randomly
+        if max_samples and max_samples < len(questions):
+            questions = random.sample(questions, max_samples)
+
+        for question_item in questions:
+            question_id = question_item['question_id']
+            image_id = question_item['image_id']
+            question_text = question_item['question']
+
+            # Construct image path
+            image_filename = f"COCO_val2014_{image_id:012d}.jpg"
+            image_path = os.path.join(images_dir, image_filename)
+
+            # Check if image exists
+            if not os.path.exists(image_path):
+                continue
+
+            # Get annotation if available
+            annotation = annotations_map.get(question_id, {})
+            answers = annotation.get('answers', [])
+
+            # Create sample
+            sample = {
+                "txt": question_text,
+                "img": image_path,
+                "toxicity": 0,  # VQAv2 is benign
+                "question_id": question_id,
+                "image_id": image_id,
+                "answers": [ans['answer'] for ans in answers] if answers else []
+            }
+            samples.append(sample)
+
+        print(f"Successfully loaded {len(samples)} samples from VQAv2 validation set")
+        return samples
+
+    except FileNotFoundError as e:
+        print(f"VQAv2 dataset files not found: {e}")
+        return []
+    except Exception as e:
+        print(f"Error loading VQAv2 dataset: {e}")
+        return []
 
 def load_dan_jailbreak_prompts(max_samples=None):
     """Alias for load_dan_prompts for backward compatibility"""
@@ -751,7 +809,3 @@ def load_openassistant(max_samples=None):
 
     print("OpenAssistant dataset not found. Please run download_openassistant.py first.")
     return []
-
-# UltraChat, WildJailbreak variants, JBB-Behaviors, and MMIU-Benchmark removed - not used in current experiments
-
-# MMMU removed - not used in current experiments
