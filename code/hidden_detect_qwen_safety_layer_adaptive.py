@@ -64,8 +64,6 @@ def discover_refusal_tokens(model, processor, tokenizer, max_iterations=3, top_k
                 outputs = model.generate(
                     **inputs,
                     max_new_tokens=50,
-                    do_sample=False,
-                    temperature=0.0,
                     pad_token_id=tokenizer.eos_token_id
                 )
             
