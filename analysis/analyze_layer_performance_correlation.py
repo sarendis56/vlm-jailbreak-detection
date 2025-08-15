@@ -114,8 +114,15 @@ def find_latest_multi_run_results():
         dirs = glob.glob(pattern)
 
         if dirs:
-            # Get the latest directory (by name, which includes timestamp)
-            latest_dir = sorted(dirs)[-1]
+            # Get the latest directory by extracting and comparing timestamps
+            def extract_timestamp(dir_path):
+                # Extract timestamp from pattern like "ml_qwen_50runs_20250814_181114"
+                import re
+                match = re.search(r'_(\d{8}_\d{6})$', dir_path)
+                return match.group(1) if match else '00000000_000000'
+
+            # Sort by timestamp (newest first)
+            latest_dir = sorted(dirs, key=extract_timestamp)[-1]
             latest_results[method] = latest_dir
             print(f"Found latest {method.upper()} results: {latest_dir}")
         else:
@@ -138,6 +145,13 @@ def load_performance_data(results_dirs):
             # For ML method, load individual ML methods (SVM and MLP)
             method_data = {}
 
+            # Detect model type from directory name
+            model_type = 'llava'  # default
+            if 'qwen' in result_dir.lower():
+                model_type = 'qwen'
+            elif 'llava' in result_dir.lower():
+                model_type = 'llava'
+
             # Load F1 data
             if os.path.exists(f1_path):
                 f1_df = pd.read_csv(f1_path)
@@ -145,8 +159,8 @@ def load_performance_data(results_dirs):
                 f1_combined = f1_df[f1_df['Dataset'] == 'COMBINED'].copy()
 
                 # Extract SVM and MLP data separately
-                svm_f1 = f1_combined[f1_combined['Method'] == 'ML_SVM'][['Layer', 'F1_Mean', 'F1_Std']].copy()
-                mlp_f1 = f1_combined[f1_combined['Method'] == 'ML_MLP'][['Layer', 'F1_Mean', 'F1_Std']].copy()
+                svm_f1 = f1_combined[f1_combined['Method'] == f'ML_{model_type.upper()}_SVM'][['Layer', 'F1_Mean', 'F1_Std']].copy()
+                mlp_f1 = f1_combined[f1_combined['Method'] == f'ML_{model_type.upper()}_MLP'][['Layer', 'F1_Mean', 'F1_Std']].copy()
 
                 if not svm_f1.empty:
                     all_data['svm'] = {'f1': svm_f1}
@@ -165,8 +179,8 @@ def load_performance_data(results_dirs):
                 auroc_combined = auroc_df[auroc_df['Dataset'] == 'COMBINED'].copy()
 
                 # Extract SVM and MLP data separately
-                svm_auroc = auroc_combined[auroc_combined['Method'] == 'ML_SVM'][['Layer', 'AUROC_Mean', 'AUROC_Std']].copy()
-                mlp_auroc = auroc_combined[auroc_combined['Method'] == 'ML_MLP'][['Layer', 'AUROC_Mean', 'AUROC_Std']].copy()
+                svm_auroc = auroc_combined[auroc_combined['Method'] == f'ML_{model_type.upper()}_SVM'][['Layer', 'AUROC_Mean', 'AUROC_Std']].copy()
+                mlp_auroc = auroc_combined[auroc_combined['Method'] == f'ML_{model_type.upper()}_MLP'][['Layer', 'AUROC_Mean', 'AUROC_Std']].copy()
 
                 if not svm_auroc.empty:
                     if 'svm' not in all_data:

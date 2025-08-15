@@ -891,11 +891,11 @@ def save_layer_rankings(results, layers, model_types):
     # Create rankings for each method
     method_rankings = {}
 
-    for model_type in model_types:
+    for ml_model_type in model_types:
         # Get AUROC scores for this method across all layers
         layer_aurocs = []
         for layer_idx in layers:
-            result = results[layer_idx][model_type]
+            result = results[layer_idx][ml_model_type]
             auroc = result['auroc']
             # Handle NaN values by assigning a very low score
             if np.isnan(auroc):
@@ -904,17 +904,17 @@ def save_layer_rankings(results, layers, model_types):
 
         # Sort by AUROC (descending)
         layer_aurocs.sort(key=lambda x: x[1], reverse=True)
-        method_rankings[model_type] = layer_aurocs
+        method_rankings[ml_model_type] = layer_aurocs
 
     # Save rankings to CSV
-    rankings_path = "results/balanced_ml_results_ranking_{model_type}.csv"
+    rankings_path = "results/balanced_ml_results_ranking.csv"
     with open(rankings_path, "w", newline="") as csvfile:
         writer = csv.writer(csvfile)
         writer.writerow(["Method", "Rank", "Layer", "AUROC", "Accuracy", "F1", "TPR", "FPR", "AUPRC"])
 
-        for model_type in model_types:
-            for rank, (layer_idx, auroc) in enumerate(method_rankings[model_type], 1):
-                result = results[layer_idx][model_type]
+        for ml_model_type in model_types:
+            for rank, (layer_idx, auroc) in enumerate(method_rankings[ml_model_type], 1):
+                result = results[layer_idx][ml_model_type]
 
                 # Format values
                 auroc_str = "N/A" if np.isnan(result['auroc']) else f"{result['auroc']:.4f}"
@@ -924,7 +924,7 @@ def save_layer_rankings(results, layers, model_types):
                 fpr_str = "N/A" if np.isnan(result['fpr']) else f"{result['fpr']:.4f}"
 
                 writer.writerow([
-                    model_type.upper(),
+                    ml_model_type.upper(),
                     rank,
                     layer_idx,
                     auroc_str,
@@ -942,13 +942,13 @@ def save_layer_rankings(results, layers, model_types):
     print("LAYER RANKINGS BY METHOD (Based on AUROC)")
     print("="*80)
 
-    for model_type in model_types:
-        print(f"\n{model_type.upper()} Method - Top 5 Layers:")
+    for ml_model_type in model_types:
+        print(f"\n{ml_model_type.upper()} Method - Top 5 Layers:")
         print("  Rank | Layer | AUROC  | Accuracy | F1     | TPR    | FPR    | AUPRC")
         print("  -----|-------|--------|----------|--------|--------|--------|--------")
 
-        for rank, (layer_idx, _) in enumerate(method_rankings[model_type][:5], 1):
-            result = results[layer_idx][model_type]
+        for rank, (layer_idx, _) in enumerate(method_rankings[ml_model_type][:5], 1):
+            result = results[layer_idx][ml_model_type]
             auroc_str = "N/A   " if np.isnan(result['auroc']) else f"{result['auroc']:.4f}"
             auprc_str = "N/A   " if np.isnan(result['auprc']) else f"{result['auprc']:.4f}"
             f1_str = f"{result['f1']:.4f}"
@@ -967,10 +967,10 @@ def save_layer_rankings(results, layers, model_types):
     for layer_idx in layers:
         # Get all methods' performance for this layer
         layer_performance = []
-        for model_type in model_types:
-            result = results[layer_idx][model_type]
+        for ml_model_type in model_types:
+            result = results[layer_idx][ml_model_type]
             auroc = result['auroc'] if not np.isnan(result['auroc']) else 0.0
-            layer_performance.append((model_type, auroc, result['accuracy'], result['f1'], result['tpr'], result['fpr']))
+            layer_performance.append((ml_model_type, auroc, result['accuracy'], result['f1'], result['tpr'], result['fpr']))
 
         # Sort by AUROC
         layer_performance.sort(key=lambda x: x[1], reverse=True)
@@ -1107,7 +1107,7 @@ def main():
     # Train and evaluate models for each layer and model type
     results = {}
     layers = list(range(layer_start, layer_end + 1))  # Use dynamic layer range
-    model_types = ['mlp', 'logistic', 'ridge', 'svm', 'sgd']
+    model_types = ['mlp', 'svm']  # Only run MLP and SVM to save time
 
     print("\n--- Training and Evaluating Models ---")
     for layer_idx in layers:
@@ -1291,60 +1291,6 @@ def save_results_and_summary(results, layers, model_types, train_size, test_size
     print("\nDetailed layer rankings and cross-method comparisons are shown above.")
 
     # The CSV has already been saved above in the correct format for multi-run compatibility
-    os.makedirs("results", exist_ok=True)
-
-    # Calculate rankings based on accuracy (primary metric for ML methods)
-    # Create list of (layer, model_type, accuracy) for ranking
-    performance_list = []
-    for layer_idx in layers:
-        for model_type in model_types:
-            result = results[layer_idx][model_type]
-            performance_list.append((layer_idx, model_type, result['accuracy']))
-
-    # Sort by accuracy (descending) for ranking
-    performance_list.sort(key=lambda x: x[2], reverse=True)
-
-    # Create ranking mappings
-    combined_ranks = {}  # (layer, model) -> rank
-    individual_ranks = {}  # (layer, model) -> rank
-
-    # Combined ranking (overall ranking across all layer-model combinations)
-    for rank, (layer_idx, model_type, _) in enumerate(performance_list, 1):
-        combined_ranks[(layer_idx, model_type)] = rank
-
-    # Individual ranking per layer (rank models within each layer)
-    for layer_idx in layers:
-        layer_performance = [(model_type, results[layer_idx][model_type]['accuracy'])
-                           for model_type in model_types]
-        layer_performance.sort(key=lambda x: x[1], reverse=True)
-
-        for rank, (model_type, _) in enumerate(layer_performance, 1):
-            individual_ranks[(layer_idx, model_type)] = rank
-
-    with open(output_path, 'w', newline='') as csvfile:
-        fieldnames = ['Layer', 'Dataset', 'Method', 'Accuracy', 'F1', 'TPR', 'FPR', 'AUROC', 'AUPRC', 'Threshold', 'Combined_Rank', 'Individual_Rank']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        writer.writeheader()
-
-        for layer_idx in layers:
-            for ml_model_type in model_types:
-                result = results[layer_idx][ml_model_type]
-                writer.writerow({
-                    'Layer': layer_idx,
-                    'Dataset': 'COMBINED',  # ML script uses combined balanced dataset
-                    'Method': f'ML_{model_type.upper()}_{ml_model_type.upper()}',
-                    'Accuracy': f"{result['accuracy']:.6f}",
-                    'F1': f"{result['f1']:.6f}",
-                    'TPR': f"{result['tpr']:.6f}" if not np.isnan(result['tpr']) else "N/A",
-                    'FPR': f"{result['fpr']:.6f}" if not np.isnan(result['fpr']) else "N/A",
-                    'AUROC': f"{result['auroc']:.6f}" if not np.isnan(result['auroc']) else "N/A",
-                    'AUPRC': f"{result.get('auprc', 0.0):.6f}",  # Default to 0 if not available
-                    'Threshold': f"{result.get('threshold', 0.5):.6f}",  # Default threshold
-                    'Combined_Rank': combined_ranks[(layer_idx, model_type)],
-                    'Individual_Rank': individual_ranks[(layer_idx, model_type)]
-                })
-
-    print(f"Results saved to: {output_path}")
     print("="*80)
 
 if __name__ == "__main__":
