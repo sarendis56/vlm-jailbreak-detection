@@ -109,3 +109,5 @@ datasets
 fastchat==0.1.0
 seaborn
 requests
+textaugment==2.0.0
+textblob==0.17.1
